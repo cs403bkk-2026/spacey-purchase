@@ -69,8 +69,29 @@ def create_space(cur, name, capacity, price_cents):
     return cur.fetchone(), 201
 
 
-def update_space(cur, space_id, name, capacity, price_cents) -> dict | None:
-    """None for a field keeps its current value; returns None if not found."""
+def update_space(cur, space_id, fields):
+    """Change a space's name, capacity and/or price. fields is the request
+    body: a field left out keeps its current value, but one sent as null is
+    rejected - so this needs the body itself, not just its values.
+    Returns (payload, status) - the updated space, or an {"error": ...}."""
+    if not any(field in fields for field in ("name", "capacity", "price_cents")):
+        return {"error": "provide name, capacity and/or price_cents to update"}, 400
+    if get_space(cur, space_id) is None:
+        return {"error": "space not found"}, 404
+
+    name = fields.get("name")
+    capacity = fields.get("capacity")
+    price_cents = fields.get("price_cents")
+    if "name" in fields and not is_valid_name(name):
+        return {"error": "name must not be empty"}, 400
+    if "capacity" in fields and not is_valid_capacity(capacity):
+        return {"error": "capacity must be a whole number of at least 1"}, 400
+    if "price_cents" in fields and not is_valid_price(price_cents):
+        return {"error": "price_cents must be a non-negative integer"}, 400
+    if name is not None:
+        name = name.strip()
+
+    # COALESCE keeps the current value for fields not in the request
     cur.execute(
         "UPDATE spaces "
         "SET name = COALESCE(%s, name), "
@@ -80,7 +101,7 @@ def update_space(cur, space_id, name, capacity, price_cents) -> dict | None:
         f"RETURNING {SPACE_COLUMNS}",
         (name, capacity, price_cents, space_id),
     )
-    return cur.fetchone()
+    return cur.fetchone(), 200
 
 
 def delete_space(cur, space_id):

@@ -1,4 +1,4 @@
-"""Space helpers: validating a space and finding which are booked."""
+"""Space helpers: validating, storing and finding which spaces are booked."""
 
 
 def is_valid_capacity(capacity) -> bool:
@@ -34,3 +34,53 @@ def booked_space_ids(cur, window) -> set:
             (end_time, start_time),
         )
     return {row["space_id"] for row in cur.fetchall()}
+
+
+SPACE_COLUMNS = "id, name, capacity, price_cents"
+
+
+def list_spaces(cur) -> list:
+    cur.execute(f"SELECT {SPACE_COLUMNS} FROM spaces")
+    return cur.fetchall()
+
+
+def get_space(cur, space_id) -> dict | None:
+    cur.execute(f"SELECT {SPACE_COLUMNS} FROM spaces WHERE id = %s", (space_id,))
+    return cur.fetchone()
+
+
+def create_space(cur, name, capacity, price_cents) -> dict:
+    cur.execute(
+        "INSERT INTO spaces (name, capacity, price_cents) VALUES (%s, %s, %s) "
+        f"RETURNING {SPACE_COLUMNS}",
+        (name, capacity, price_cents),
+    )
+    return cur.fetchone()
+
+
+def update_space(cur, space_id, name, capacity, price_cents) -> dict | None:
+    """None for a field keeps its current value; returns None if not found."""
+    cur.execute(
+        "UPDATE spaces "
+        "SET name = COALESCE(%s, name), "
+        "capacity = COALESCE(%s, capacity), "
+        "price_cents = COALESCE(%s, price_cents) "
+        "WHERE id = %s "
+        f"RETURNING {SPACE_COLUMNS}",
+        (name, capacity, price_cents, space_id),
+    )
+    return cur.fetchone()
+
+
+def delete_space(cur, space_id):
+    """Delete a space, refused while it still has bookings.
+    Returns (payload, status) - payload is None once deleted."""
+    if get_space(cur, space_id) is None:
+        return {"error": "space not found"}, 404
+    cur.execute(
+        "SELECT 1 FROM bookings WHERE space_id = %s LIMIT 1", (space_id,)
+    )
+    if cur.fetchone() is not None:
+        return {"error": "space has bookings, cancel them first"}, 409
+    cur.execute("DELETE FROM spaces WHERE id = %s", (space_id,))
+    return None, 204

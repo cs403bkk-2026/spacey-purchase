@@ -1,10 +1,15 @@
-"""Booking helpers: parsing times, pricing and booking a space."""
+"""Booking helpers: pricing, booking a space and finding bookings."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
 from purchase.member import is_subscribed
+
+BOOKING_COLUMNS = (
+    "id, space_id, member, paid, start_time, end_time, "
+    "amount_cents, user_id, card_last4, created_at"
+)
 
 
 def calculate_booking_price_cents(
@@ -66,8 +71,7 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
             "(space_id, member, paid, start_time, end_time, "
             "amount_cents, user_id) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING id, space_id, member, paid, start_time, end_time, "
-            "amount_cents, user_id, card_last4, created_at",
+            f"RETURNING {BOOKING_COLUMNS}",
             (
                 space_id,
                 member,
@@ -89,37 +93,33 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
     return cur.fetchone(), 201
 
 
-def parse_time(value) -> datetime | None:
-    """ISO 8601 with a timezone, e.g. 2026-09-25T09:00:00+07:00."""
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed
+def list_bookings(cur) -> list:
+    cur.execute(f"SELECT {BOOKING_COLUMNS} FROM bookings ORDER BY start_time")
+    return cur.fetchall()
 
 
-def parse_window(args) -> tuple[tuple | None, str | None]:
-    """Optional ?start_time=&end_time= as (window, error); window is None if absent."""
-    raw_start, raw_end = args.get("start_time"), args.get("end_time")
-    if raw_start is None and raw_end is None:
-        return None, None
-    start_time, end_time = parse_time(raw_start), parse_time(raw_end)
-    if start_time is None or end_time is None:
-        return None, (
-            "start_time and end_time must be given together "
-            "(ISO 8601 with timezone, e.g. 2026-09-25T09:00:00Z)"
-        )
-    if end_time <= start_time:
-        return None, "end_time must be after start_time"
-    return (start_time, end_time), None
+def list_space_bookings(cur, space_id) -> list:
+    cur.execute(
+        f"SELECT {BOOKING_COLUMNS} FROM bookings "
+        "WHERE space_id = %s ORDER BY start_time",
+        (space_id,),
+    )
+    return cur.fetchall()
 
 
-def booking_to_json(row: dict) -> dict:
-    return {
-        **row,
-        "start_time": row["start_time"].astimezone(timezone.utc).isoformat(),
-        "end_time": row["end_time"].astimezone(timezone.utc).isoformat(),
-        "created_at": row["created_at"].astimezone(timezone.utc).isoformat(),
-    }
+def get_booking(cur, booking_id) -> dict | None:
+    cur.execute(
+        f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,)
+    )
+    return cur.fetchone()
+
+
+def cancel_booking(cur, booking_id) -> dict | None:
+    """Delete a booking (its access code goes with it); None if not found."""
+    cur.execute(
+        f"DELETE FROM bookings WHERE id = %s RETURNING {BOOKING_COLUMNS}",
+        (booking_id,),
+    )
+    return cur.fetchone()
+
+

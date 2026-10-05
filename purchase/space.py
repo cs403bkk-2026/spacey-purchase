@@ -49,13 +49,24 @@ def get_space(cur, space_id) -> dict | None:
     return cur.fetchone()
 
 
-def create_space(cur, name, capacity, price_cents) -> dict:
+def create_space(cur, name, capacity, price_cents):
+    """Add a space after checking its fields; the name is stored trimmed.
+    Returns (payload, status) - the new space, or an {"error": ...}."""
+    if name is None or capacity is None:
+        return {"error": "name and capacity are required"}, 400
+    if not is_valid_name(name):
+        return {"error": "name must not be empty"}, 400
+    if not is_valid_capacity(capacity):
+        return {"error": "capacity must be a whole number of at least 1"}, 400
+    if not is_valid_price(price_cents):
+        return {"error": "price_cents must be a non-negative integer"}, 400
+
     cur.execute(
         "INSERT INTO spaces (name, capacity, price_cents) VALUES (%s, %s, %s) "
         f"RETURNING {SPACE_COLUMNS}",
-        (name, capacity, price_cents),
+        (name.strip(), capacity, price_cents),
     )
-    return cur.fetchone()
+    return cur.fetchone(), 201
 
 
 def update_space(cur, space_id, name, capacity, price_cents) -> dict | None:

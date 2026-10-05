@@ -4,7 +4,7 @@ import re
 from datetime import timezone
 
 from psycopg.errors import UniqueViolation
-from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # Deliberately simple: good enough to catch a typo, not full RFC 5322.
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -39,6 +39,27 @@ def register_user(cur, email, password):
     except UniqueViolation:
         return {"error": "email is already registered"}, 409
     return cur.fetchone(), 201
+
+
+
+def authenticate(cur, email, password):
+    """Check an email and password; the caller starts the session.
+    Returns (payload, status) - {"id": ..., "email": ...}, or an error.
+    Wrong password and unknown email give the identical error, so a
+    failed attempt can't be used to find out which emails are registered."""
+    invalid = {"error": "invalid email or password"}, 401
+    if not isinstance(email, str) or not isinstance(password, str):
+        return invalid
+
+    cur.execute(
+        "SELECT id, email, password_hash FROM users WHERE email = %s",
+        (email.strip().lower(),),
+    )
+    user = cur.fetchone()
+
+    if user is None or not check_password_hash(user["password_hash"], password):
+        return invalid
+    return {"id": user["id"], "email": user["email"]}, 200
 
 
 def member_key(name: str) -> str:

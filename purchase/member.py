@@ -7,6 +7,16 @@ def member_key(name: str) -> str:
     return name.strip().lower()
 
 
+def normalise_member_name(name) -> str | None:
+    """The name a booking is stored under: trimmed, "guest" if missing or
+    blank. None if it isn't a string at all."""
+    if name is None:
+        return "guest"
+    if not isinstance(name, str):
+        return None
+    return name.strip() or "guest"
+
+
 def is_subscribed(cur, member) -> bool:
     if not isinstance(member, str):
         return False

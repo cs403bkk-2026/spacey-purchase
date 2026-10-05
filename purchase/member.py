@@ -3,6 +3,9 @@
 import re
 from datetime import timezone
 
+from psycopg.errors import UniqueViolation
+from werkzeug.security import generate_password_hash
+
 # Deliberately simple: good enough to catch a typo, not full RFC 5322.
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -13,6 +16,29 @@ def is_valid_email(email) -> bool:
 
 def is_valid_password(password) -> bool:
     return isinstance(password, str) and len(password) >= 8
+
+
+
+def register_user(cur, email, password):
+    """Create an account, storing only a hash of the password.
+    Returns (payload, status) - {"id": ..., "email": ...}, or an error."""
+    if not is_valid_email(email):
+        return {"error": "enter a valid email address"}, 400
+    if not is_valid_password(password):
+        return {"error": "password must be at least 8 characters"}, 400
+
+    email = email.strip().lower()
+    password_hash = generate_password_hash(password)
+
+    try:
+        cur.execute(
+            "INSERT INTO users (email, password_hash) VALUES (%s, %s) "
+            "RETURNING id, email",
+            (email, password_hash),
+        )
+    except UniqueViolation:
+        return {"error": "email is already registered"}, 409
+    return cur.fetchone(), 201
 
 
 def member_key(name: str) -> str:

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
-from purchase.member import is_subscribed
+from purchase.member import normalise_member_name, is_subscribed
 
 BOOKING_COLUMNS = (
     "id, space_id, member, paid, start_time, end_time, "
@@ -26,6 +26,7 @@ def calculate_booking_price_cents(
 
 def create_booking(cur, space_id, member, start_time, end_time, party_size, user_id):
     """Book a space for a member; user_id is the logged-in account or None.
+    member is the name as sent: trimmed, "guest" if missing or blank.
     Returns (payload, status) - the raw booking row, or an {"error": ...}."""
     cur.execute(
         "SELECT id, capacity, price_cents FROM spaces WHERE id = %s",
@@ -34,6 +35,10 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
     space = cur.fetchone()
     if space is None:
         return {"error": "space not found"}, 404
+
+    member = normalise_member_name(member)
+    if member is None:
+        return {"error": "member must be a string"}, 400
 
     if end_time <= start_time:
         return {"error": "end_time must be after start_time"}, 400

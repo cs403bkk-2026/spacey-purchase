@@ -84,3 +84,14 @@ def delete_space(cur, space_id):
         return {"error": "space has bookings, cancel them first"}, 409
     cur.execute("DELETE FROM spaces WHERE id = %s", (space_id,))
     return None, 204
+
+
+def seed_starter_space(cur) -> None:
+    """Give an empty database one space, so there is something to book."""
+    cur.execute("SELECT COUNT(*) AS count FROM spaces")
+    if cur.fetchone()["count"] == 0:
+        cur.execute(
+            "INSERT INTO spaces (name, capacity, price_cents) "
+            "VALUES (%s, %s, %s)",
+            ("Founders Desk", 1, 2500),  # $25.00 per hour
+        )

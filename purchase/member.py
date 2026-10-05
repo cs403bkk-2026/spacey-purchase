@@ -1,6 +1,18 @@
-"""Member helpers: subscriptions, which cover a member's bookings."""
+"""Member helpers: accounts, and subscriptions, which cover a member's bookings."""
 
+import re
 from datetime import timezone
+
+# Deliberately simple: good enough to catch a typo, not full RFC 5322.
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_valid_email(email) -> bool:
+    return isinstance(email, str) and EMAIL_RE.match(email.strip()) is not None
+
+
+def is_valid_password(password) -> bool:
+    return isinstance(password, str) and len(password) >= 8
 
 
 def member_key(name: str) -> str:

@@ -112,6 +112,16 @@ def list_space_bookings(cur, space_id) -> list:
     return cur.fetchall()
 
 
+def list_user_bookings(cur, user_id) -> list:
+    """Bookings made while logged in as user_id; guest bookings never match."""
+    cur.execute(
+        f"SELECT {BOOKING_COLUMNS} FROM bookings "
+        "WHERE user_id = %s ORDER BY start_time",
+        (user_id,),
+    )
+    return cur.fetchall()
+
+
 def get_booking(cur, booking_id) -> dict | None:
     cur.execute(
         f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,)

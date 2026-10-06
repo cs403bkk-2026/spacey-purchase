@@ -1,6 +1,6 @@
 """Booking helpers: pricing, booking a space and finding bookings."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
@@ -10,6 +10,16 @@ BOOKING_COLUMNS = (
     "id, space_id, member, paid, start_time, end_time, "
     "amount_cents, user_id, card_last4, created_at"
 )
+
+
+def booking_to_json(row: dict) -> dict:
+    """A booking row ready for jsonify: its times as UTC ISO 8601 strings."""
+    return {
+        **row,
+        "start_time": row["start_time"].astimezone(timezone.utc).isoformat(),
+        "end_time": row["end_time"].astimezone(timezone.utc).isoformat(),
+        "created_at": row["created_at"].astimezone(timezone.utc).isoformat(),
+    }
 
 
 def calculate_booking_price_cents(

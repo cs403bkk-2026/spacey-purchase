@@ -1,15 +1,26 @@
 """Booking helpers: pricing, booking a space and finding bookings."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
+from payment.services import authorize_card
 from purchase.member import normalise_member_name, is_subscribed
 
 BOOKING_COLUMNS = (
     "id, space_id, member, paid, start_time, end_time, "
     "amount_cents, user_id, card_last4, created_at"
 )
+
+
+def booking_to_json(row: dict) -> dict:
+    """A booking row ready for jsonify: its times as UTC ISO 8601 strings."""
+    return {
+        **row,
+        "start_time": row["start_time"].astimezone(timezone.utc).isoformat(),
+        "end_time": row["end_time"].astimezone(timezone.utc).isoformat(),
+        "created_at": row["created_at"].astimezone(timezone.utc).isoformat(),
+    }
 
 
 def calculate_booking_price_cents(
@@ -127,6 +138,38 @@ def get_booking(cur, booking_id) -> dict | None:
         f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,)
     )
     return cur.fetchone()
+
+
+def mark_paid(cur, booking_id, card_last4) -> dict | None:
+    """Flip the booking to paid, keeping only the card's last 4 digits.
+    Returns the updated row."""
+    cur.execute(
+        "UPDATE bookings SET paid = TRUE, card_last4 = %s WHERE id = %s "
+        f"RETURNING {BOOKING_COLUMNS}",
+        (card_last4, booking_id),
+    )
+    return cur.fetchone()
+
+
+def mark_booking_paid(cur, booking_id, card_number, expiry, cvc, force_failure=False):
+    """Pay for a booking. Payment decides whether the card is accepted
+    (payment.services.authorize_card); this owns the booking's paid state.
+    Paying an already-paid booking is a no-op rather than an error, so a
+    retried request can't break the flow or charge twice - and doesn't need
+    a card either. Only the card's last 4 digits are ever stored.
+    Returns (payload, status) - the raw booking row, or an {"error": ...}."""
+    row = get_booking(cur, booking_id)
+    if row is None:
+        return {"error": "booking not found"}, 404
+
+    if row["paid"]:
+        return row, 200
+
+    rejected = authorize_card(card_number, expiry, cvc, force_failure)
+    if rejected:
+        return rejected
+
+    return mark_paid(cur, booking_id, card_number[-4:]), 200
 
 
 def cancel_booking(cur, booking_id) -> dict | None:

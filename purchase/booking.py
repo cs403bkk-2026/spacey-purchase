@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from psycopg import Error as DatabaseError
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
-from log import logger
+from shared.logger import logger
 from payment.services import authorize_card
 from purchase.member import normalise_member_name, is_subscribed
 

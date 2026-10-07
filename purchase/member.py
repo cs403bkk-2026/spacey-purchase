@@ -2,6 +2,7 @@
 
 import re
 from datetime import timezone
+from unicodedata import name
 
 from psycopg.errors import UniqueViolation
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -77,7 +78,7 @@ def normalise_member_name(name) -> str | None:
 
 
 def is_subscribed(cur, member) -> bool:
-    if not isinstance(member, str):
+    if not isinstance(member, str) or member_key(member) == "guest":
         return False
     cur.execute(
         "SELECT 1 FROM subscriptions WHERE member = %s AND active",
@@ -93,6 +94,9 @@ def subscribe(cur, name):
     member = member_key(name)
     if not member:
         return {"error": "member name must not be blank"}, 400
+    if member == "guest":
+        return {"error": "cannot subscribe the default guest account"}, 400
+    
 
     cur.execute(
         "INSERT INTO subscriptions (member) VALUES (%s) "
@@ -106,3 +110,4 @@ def subscribe(cur, name):
         "active": row["active"],
         "started_at": row["started_at"].astimezone(timezone.utc).isoformat(),
     }, 200
+    

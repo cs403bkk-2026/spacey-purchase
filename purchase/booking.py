@@ -2,8 +2,10 @@
 
 from datetime import datetime, timezone
 
+from psycopg import Error as DatabaseError
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
+from log import logger
 from payment.services import authorize_card
 from purchase.member import normalise_member_name, is_subscribed
 
@@ -158,18 +160,30 @@ def mark_booking_paid(cur, booking_id, card_number, expiry, cvc, force_failure=F
     retried request can't break the flow or charge twice - and doesn't need
     a card either. Only the card's last 4 digits are ever stored.
     Returns (payload, status) - the raw booking row, or an {"error": ...}."""
-    row = get_booking(cur, booking_id)
-    if row is None:
-        return {"error": "booking not found"}, 404
+    logger.debug("payment booking_id=%s outcome=started", booking_id)
+    try:
+        row = get_booking(cur, booking_id)
+        if row is None:
+            logger.warning("payment booking_id=%s outcome=not_found", booking_id)
+            return {"error": "booking not found"}, 404
 
-    if row["paid"]:
+        if row["paid"]:
+            logger.info("payment booking_id=%s outcome=already_paid", booking_id)
+            return row, 200
+
+        rejected = authorize_card(card_number, expiry, cvc, force_failure)
+        if rejected:
+            outcome = "invalid_card" if rejected[1] == 400 else "failed"
+            logger.warning("payment booking_id=%s outcome=%s", booking_id, outcome)
+            return rejected
+
+        row = mark_paid(cur, booking_id, card_number[-4:])
+        logger.info("payment booking_id=%s outcome=succeeded", booking_id)
         return row, 200
-
-    rejected = authorize_card(card_number, expiry, cvc, force_failure)
-    if rejected:
-        return rejected
-
-    return mark_paid(cur, booking_id, card_number[-4:]), 200
+    except DatabaseError:
+        # Database diagnostics may include SQL parameters; never log the exception.
+        logger.error("payment booking_id=%s outcome=database_error", booking_id)
+        return {"error": "payment unavailable"}, 500
 
 
 def cancel_booking(cur, booking_id) -> dict | None:

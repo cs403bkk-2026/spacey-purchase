@@ -21,3 +21,16 @@ Port 8001 lets it run next to `spacey` on 8000.
 ## Shared database
 
 Until PUR-008, this service and `spacey` share one database.
+
+## Branch protection
+
+`main` is protected by the ruleset in `.github/rulesets/protect-main.json`: changes go through a pull request with 1 approval from someone other than the last pusher, new pushes dismiss approvals, review threads must be resolved, and `main` cannot be deleted. Org admins can bypass.
+
+Applying it needs repo admin:
+
+```
+gh api -X POST repos/cs403bkk-2026/spacey-purchase/rulesets --input .github/rulesets/protect-main.json
+gh api -X PATCH repos/cs403bkk-2026/spacey-purchase -F delete_branch_on_merge=true
+```
+
+To change an existing ruleset, use `gh api -X PUT repos/cs403bkk-2026/spacey-purchase/rulesets/<id> --input ...` (list ids with `gh api repos/cs403bkk-2026/spacey-purchase/rulesets`).

@@ -1,0 +1,763 @@
+openapi: 3.0.3
+info:
+  title: Spacey API
+  description: >
+    A space booking system: find a space, book it, pay once or subscribe,
+    and get access through a mocked lock.
+
+
+    This document covers the JSON API. `GET /` redirects to the browser
+    client at `/app/`. `GET /dashboard` redirects to the external Grafana
+    business metrics report.
+  version: "1.0"
+servers:
+  - url: /
+    description: Same host the app is running on (local, container, or the deployed URL).
+
+tags:
+  - name: spaces
+  - name: bookings
+  - name: members
+  - name: accounts
+    description: Registration and login. See issue #120.
+  - name: operations
+    description: Health and business metrics.
+
+paths:
+  /health:
+    get:
+      tags: [operations]
+      summary: Check the app and database are reachable.
+      responses:
+        "200":
+          description: Healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  revision:
+                    type: string
+                    description: The `APP_REVISION` environment variable, or `local` if unset.
+                required: [status, revision]
+        "503":
+          description: The database is unreachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [error] }
+                  error: { type: string, example: database unreachable }
+                required: [status, error]
+
+  /spaces:
+    get:
+      tags: [spaces]
+      summary: List every space.
+      description: >
+        `available` normally reflects this exact instant. Pass `start_time`
+        and `end_time` together to check availability for a specific window
+        instead - the same back-to-back-is-fine overlap rule booking uses.
+      parameters:
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: The full space list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  spaces:
+                    type: array
+                    items: { $ref: "#/components/schemas/Space" }
+                required: [spaces]
+        "400":
+          $ref: "#/components/responses/BadWindow"
+    post:
+      tags: [spaces]
+      summary: Create a space.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, example: Meeting Room A }
+                capacity:
+                  type: integer
+                  minimum: 1
+                  example: 6
+                price_cents:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                  description: >
+                    Per-hour rate. A booking is charged this rate times the
+                    hours booked, rounded to whole cents.
+                  example: 1500
+              required: [name, capacity]
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer, example: 1 }
+                  name: { type: string }
+                  capacity: { type: integer }
+                  price_cents: { type: integer }
+                required: [id, name, capacity, price_cents]
+        "400":
+          description: >
+            `name and capacity are required` (either is missing), `name must
+            not be empty`, `capacity must be a whole number of at least 1`,
+            or `price_cents must be a non-negative integer`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /spaces/{spaceId}:
+    parameters:
+      - $ref: "#/components/parameters/SpaceId"
+    get:
+      tags: [spaces]
+      summary: Get one space.
+      description: Same availability rule as `GET /spaces` - pass a window, or omit both params for "right now".
+      parameters:
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: The space.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Space" }
+        "400":
+          $ref: "#/components/responses/BadWindow"
+        "404":
+          $ref: "#/components/responses/SpaceNotFound"
+    patch:
+      tags: [spaces]
+      summary: Update a space.
+      description: >
+        Only the fields present in the body are changed; everything else
+        keeps its current value. Changing the price does not affect
+        bookings already made at the old price (see `amount_cents` on a
+        booking).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                capacity: { type: integer, minimum: 1 }
+                price_cents: { type: integer, minimum: 0 }
+              minProperties: 1
+              example: { price_cents: 2000 }
+      responses:
+        "200":
+          description: The updated space.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Space" }
+        "400":
+          description: >
+            `provide name, capacity and/or price_cents to update` (empty
+            body), or the same per-field messages as `POST /spaces`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/SpaceNotFound"
+    delete:
+      tags: [spaces]
+      summary: Delete a space.
+      description: Refused while the space has any bookings, past or present - cancel them first.
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/SpaceNotFound"
+        "409":
+          description: The space still has bookings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "space has bookings, cancel them first" }
+
+  /spaces/{spaceId}/bookings:
+    parameters:
+      - $ref: "#/components/parameters/SpaceId"
+    get:
+      tags: [bookings]
+      summary: List a space's bookings.
+      responses:
+        "200":
+          description: That space's bookings, earliest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookingList" }
+        "404":
+          $ref: "#/components/responses/SpaceNotFound"
+    post:
+      tags: [bookings]
+      summary: Book a space.
+      description: >
+        Unpaid on creation, unless `member` has an active subscription (see
+        `POST /members/{name}/subscribe`), in which case it is created
+        already paid and costs nothing extra. A later `POST
+        /bookings/{bookingId}/pay` is needed otherwise, before `.../unlock`
+        will work.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                member:
+                  type: string
+                  default: guest
+                  description: >
+                    Stored trimmed of surrounding spaces. Defaults to
+                    `guest` if omitted or blank - there is no requirement
+                    yet that a real name is given (issue #22).
+                  example: annabel
+                start_time:
+                  type: string
+                  format: date-time
+                  description: ISO 8601 with a timezone.
+                  example: "2026-09-25T09:00:00Z"
+                end_time:
+                  type: string
+                  format: date-time
+                  example: "2026-09-25T10:00:00Z"
+                party_size:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                  description: Must not exceed the space's capacity.
+              required: [start_time, end_time]
+      responses:
+        "201":
+          description: Booked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "400":
+          description: >
+            `start_time and end_time are required (ISO 8601 with
+            timezone)`, `end_time must be after start_time`, `party_size
+            must be a whole number of at least 1`, `party_size {n}
+            exceeds this space's capacity of {capacity}`, or `member must
+            be a string`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/SpaceNotFound"
+        "409":
+          description: The space is already booked for an overlapping time.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "space is already booked for that time" }
+
+  /bookings:
+    get:
+      tags: [bookings]
+      summary: List every booking, across all spaces.
+      responses:
+        "200":
+          description: Every booking, earliest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookingList" }
+
+  /me/bookings:
+    get:
+      tags: [bookings]
+      summary: List the logged-in account's bookings.
+      description: >
+        Bookings made while logged in to this session's account, filtered
+        on the server. Needs the session cookie set by `POST /login`. Guest
+        bookings (`user_id` null) are never included.
+      responses:
+        "200":
+          description: That account's bookings, earliest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookingList" }
+        "401":
+          description: Not logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "log in to see your bookings" }
+
+  /bookings/{bookingId}:
+    parameters:
+      - $ref: "#/components/parameters/BookingId"
+    get:
+      tags: [bookings]
+      summary: Get one booking.
+      responses:
+        "200":
+          description: The booking.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+    delete:
+      tags: [bookings]
+      summary: Cancel a booking.
+      description: >
+        Deletes the booking outright, whether or not it was paid - there is
+        no cancelled/refunded record kept yet (see issue #82).
+      responses:
+        "200":
+          description: The booking as it was just before it was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+
+  /bookings/{bookingId}/pay:
+    post:
+      tags: [bookings]
+      summary: Pay for a booking (mocked).
+      description: >
+        No real payment provider or network - card details are checked for
+        shape (right length, digits only, expiry not in the past) and the
+        card number must pass the Luhn checksum. There is no network check,
+        so a number that passes may still not be a real card. Only the card's
+        last 4 digits are ever stored or returned; the full number and CVC
+        are never persisted. Paying an already-paid booking is a no-op
+        (no card required for that retry), so a retried request can't
+        charge twice. Pass `force_failure: true` with a still-valid card
+        to make this attempt fail on purpose, for testing the failure
+        path - the booking is left unpaid.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                card_number:
+                  type: string
+                  description: Digits only, 13-19 characters.
+                  example: "4242424242424242"
+                expiry:
+                  type: string
+                  description: MM/YY, must not be in the past.
+                  example: "12/30"
+                cvc:
+                  type: string
+                  description: Digits only, 3-4 characters.
+                  example: "123"
+                force_failure:
+                  type: boolean
+                  default: false
+              required: [card_number, expiry, cvc]
+      responses:
+        "200":
+          description: Paid (or already was).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "400":
+          description: >
+            `card_number must be 13-19 digits`, `card_number is not a
+            valid card number` (fails the Luhn check), `cvc must be 3 or 4
+            digits`, `expiry must be in MM/YY format`, or `card has
+            expired`. Not returned when the booking is already paid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "402":
+          description: Payment failed (only when `force_failure` was set).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: payment failed }
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+        "500":
+          description: Database failure during payment; check booking status before retrying.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: payment unavailable }
+
+  /bookings/{bookingId}/unlock:
+    post:
+      tags: [bookings]
+      summary: Get an access code for a paid booking (mocked lock).
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "200":
+          description: Unlocked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking_id: { type: integer }
+                  access_code:
+                    type: string
+                    description: A random 8-character hex code. Not a real lock integration.
+                    example: 2847cae6
+                required: [booking_id, access_code]
+        "402":
+          description: The booking is not paid yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: booking is not paid }
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+
+  /members/{name}/subscribe:
+    post:
+      tags: [members]
+      summary: Subscribe a member (mocked).
+      description: >
+        No real provider and no price yet (see issue #112). Subscribing
+        again is a no-op: `started_at` does not change. The name is matched
+        trimmed and lower-cased, so "Annabel" and " annabel " are the same
+        subscriber. While active, every booking that member makes is
+        created already paid, at no extra charge.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+          example: annabel
+      responses:
+        "200":
+          description: Subscribed (or already was).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    type: string
+                    description: Trimmed and lower-cased.
+                    example: annabel
+                  active: { type: boolean, example: true }
+                  started_at: { type: string, format: date-time }
+                required: [member, active, started_at]
+        "400":
+          description: The name is blank after trimming.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "member name must not be blank" }
+
+  /register:
+    post:
+      tags: [accounts]
+      summary: Create an account.
+      description: >
+        Email is matched trimmed and lower-cased, and must be unique. The
+        password is hashed (werkzeug.security) and never stored or returned
+        as plain text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email, example: annabel@example.com }
+                password:
+                  type: string
+                  minLength: 8
+                  example: hunter22
+              required: [email, password]
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: >
+            enter a valid email address, or password must be at least 8
+            characters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: That email is already registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "email is already registered" }
+
+  /login:
+    post:
+      tags: [accounts]
+      summary: Start a session.
+      description: >
+        A wrong password and an unknown email return the identical error, so
+        a login attempt can't be used to find out which emails are registered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Wrong password, or no account with that email.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "invalid email or password" }
+
+  /logout:
+    post:
+      tags: [accounts]
+      summary: End the session.
+      description: Idempotent - logging out when already logged out does nothing.
+      responses:
+        "200":
+          description: Logged out (or already was).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /metrics:
+    get:
+      tags: [operations]
+      summary: Business metrics, as JSON.
+      description: >-
+        The application's own business totals, for machine consumption. The
+        external Grafana business metrics report is reconciled against these
+        values; the application itself no longer renders them as a page.
+      responses:
+        "200":
+          description: Current totals.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  spaces: { type: integer }
+                  bookings:
+                    type: integer
+                    description: paid_bookings + unpaid_bookings.
+                  paid_bookings: { type: integer }
+                  unpaid_bookings: { type: integer }
+                  members:
+                    type: integer
+                    description: Distinct member strings that have ever booked.
+                  revenue_cents:
+                    type: integer
+                    description: >
+                      Sum of amount_cents across paid bookings only - the
+                      price each was actually charged at booking time, not
+                      today's space price.
+                  utilization:
+                    type: number
+                    description: >
+                      Booked hours over the next 7 days as a share of
+                      available hours (spaces x 7 x 24), 0 if there are no
+                      spaces. Counts every booking regardless of paid
+                      status - this measures usage, not revenue.
+                    example: 0.15
+                  repeat_member_rate:
+                    type: number
+                    description: >
+                      Share of members (by the free-text member string,
+                      see issue #86) with more than one booking, 0 if
+                      there are no bookings.
+                    example: 0.25
+                  payment_conversion:
+                    type: number
+                    description: Share of bookings that were paid, 0 if there are no bookings.
+                    example: 0.67
+                  avg_revenue_cents_per_paid_booking:
+                    type: integer
+                    description: revenue_cents divided by paid_bookings, rounded; 0 if none are paid.
+                    example: 1500
+                  revenue_by_space:
+                    type: array
+                    description: One row per space, even one with no bookings at all.
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        revenue_cents: { type: integer }
+                      required: [id, name, revenue_cents]
+                required:
+                  [
+                    spaces, bookings, paid_bookings, unpaid_bookings, members,
+                    revenue_cents, utilization, repeat_member_rate,
+                    payment_conversion, avg_revenue_cents_per_paid_booking,
+                    revenue_by_space,
+                  ]
+
+components:
+  parameters:
+    SpaceId:
+      name: spaceId
+      in: path
+      required: true
+      schema: { type: integer }
+      example: 1
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: { type: integer }
+      example: 1
+    StartTime:
+      name: start_time
+      in: query
+      required: false
+      description: Required together with end_time; ISO 8601 with a timezone.
+      schema: { type: string, format: date-time }
+      example: "2026-09-25T09:00:00Z"
+    EndTime:
+      name: end_time
+      in: query
+      required: false
+      description: Required together with start_time; must be after it.
+      schema: { type: string, format: date-time }
+      example: "2026-09-25T10:00:00Z"
+
+  responses:
+    SpaceNotFound:
+      description: No space with that id.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "space not found" }
+    BookingNotFound:
+      description: No booking with that id.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "booking not found" }
+    BadWindow:
+      description: >
+        start_time/end_time were not given together, aren't valid ISO 8601
+        with a timezone, or end_time is not after start_time.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: >-
+              start_time and end_time must be given together (ISO 8601 with
+              timezone, e.g. 2026-09-25T09:00:00Z)
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+
+    Space:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        name: { type: string, example: Founders Desk }
+        capacity: { type: integer, example: 1 }
+        price_cents:
+          type: integer
+          example: 2500
+          description: Per-hour rate in cents.
+        available:
+          type: boolean
+          description: >
+            Whether the space is free right now, or for the requested
+            start_time/end_time window if one was given.
+      required: [id, name, capacity, price_cents, available]
+
+    Booking:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        space_id: { type: integer, example: 1 }
+        member: { type: string, example: annabel }
+        paid: { type: boolean }
+        start_time: { type: string, format: date-time, example: "2026-09-25T02:00:00+00:00" }
+        end_time: { type: string, format: date-time, example: "2026-09-25T03:00:00+00:00" }
+        amount_cents:
+          type: integer
+          description: >
+            What this booking was actually charged: the space's per-hour
+            rate times the hours booked, fixed at the price when it was
+            made (see issue #78) - a later price change does not affect
+            it. 0 for a subscriber's booking.
+          example: 1500
+        user_id:
+          type: integer
+          nullable: true
+          description: >
+            The account that was logged in when the booking was made (see
+            issue #134), or null for a guest booking made while logged out.
+          example: 1
+        card_last4:
+          type: string
+          nullable: true
+          description: >
+            The last 4 digits of the card used to pay (see issue #119).
+            Null until the booking is paid; the full card number and CVC
+            are never stored or returned.
+          example: "4242"
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            When the booking was made (see issue #138) - not when the space
+            is used, which is start_time. Set by the database.
+          example: "2026-09-24T02:48:20.933270+00:00"
+      required: [id, space_id, member, paid, start_time, end_time, amount_cents, user_id, card_last4, created_at]
+
+    User:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        email: { type: string, format: email, example: annabel@example.com }
+      required: [id, email]
+
+    BookingList:
+      type: object
+      properties:
+        bookings:
+          type: array
+          items: { $ref: "#/components/schemas/Booking" }
+      required: [bookings]

@@ -17,3 +17,7 @@ Port 8001 lets it run next to `spacey` on 8000.
 ## Endpoints
 
 - `GET /health`: `200` with `{"status": "ok", "revision": "<APP_REVISION or \"local\">"}`. No authentication.
+
+## Shared database
+
+Until PUR-008, this service and `spacey` share one database.

@@ -1,13 +1,13 @@
 """Booking helpers: pricing, booking a space and finding bookings."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from psycopg import Error as DatabaseError
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
-from shared.logger import logger
 from payment.services import authorize_card
-from purchase.member import normalise_member_name, is_subscribed
+from purchase.member import is_subscribed, normalise_member_name
+from shared.logger import logger
 
 BOOKING_COLUMNS = (
     "id, space_id, member, paid, start_time, end_time, "
@@ -19,9 +19,9 @@ def booking_to_json(row: dict) -> dict:
     """A booking row ready for jsonify: its times as UTC ISO 8601 strings."""
     return {
         **row,
-        "start_time": row["start_time"].astimezone(timezone.utc).isoformat(),
-        "end_time": row["end_time"].astimezone(timezone.utc).isoformat(),
-        "created_at": row["created_at"].astimezone(timezone.utc).isoformat(),
+        "start_time": row["start_time"].astimezone(UTC).isoformat(),
+        "end_time": row["end_time"].astimezone(UTC).isoformat(),
+        "created_at": row["created_at"].astimezone(UTC).isoformat(),
     }
 
 
@@ -61,9 +61,7 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
         or isinstance(party_size, bool)
         or party_size < 1
     ):
-        return {
-            "error": "party_size must be a whole number of at least 1"
-        }, 400
+        return {"error": "party_size must be a whole number of at least 1"}, 400
     if party_size > space["capacity"]:
         return {
             "error": f"party_size {party_size} exceeds this space's "
@@ -136,9 +134,7 @@ def list_user_bookings(cur, user_id) -> list:
 
 
 def get_booking(cur, booking_id) -> dict | None:
-    cur.execute(
-        f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,)
-    )
+    cur.execute(f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,))
     return cur.fetchone()
 
 
@@ -193,5 +189,3 @@ def cancel_booking(cur, booking_id) -> dict | None:
         (booking_id,),
     )
     return cur.fetchone()
-
-

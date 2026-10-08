@@ -10,6 +10,8 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.12 is pinned in `.python-ver
 uv sync
 uv run flask --app app run --port 8001
 uv run pytest
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 Port 8001 lets it run next to `spacey` on 8000.

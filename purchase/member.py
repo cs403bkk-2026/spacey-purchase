@@ -1,8 +1,7 @@
 """Member helpers: accounts, and subscriptions, which cover a member's bookings."""
 
 import re
-from datetime import timezone
-from unicodedata import name
+from datetime import UTC
 
 from psycopg.errors import UniqueViolation
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -17,7 +16,6 @@ def is_valid_email(email) -> bool:
 
 def is_valid_password(password) -> bool:
     return isinstance(password, str) and len(password) >= 8
-
 
 
 def register_user(cur, email, password):
@@ -40,7 +38,6 @@ def register_user(cur, email, password):
     except UniqueViolation:
         return {"error": "email is already registered"}, 409
     return cur.fetchone(), 201
-
 
 
 def authenticate(cur, email, password):
@@ -96,7 +93,6 @@ def subscribe(cur, name):
         return {"error": "member name must not be blank"}, 400
     if member == "guest":
         return {"error": "cannot subscribe the default guest account"}, 400
-    
 
     cur.execute(
         "INSERT INTO subscriptions (member) VALUES (%s) "
@@ -108,6 +104,5 @@ def subscribe(cur, name):
     return {
         "member": row["member"],
         "active": row["active"],
-        "started_at": row["started_at"].astimezone(timezone.utc).isoformat(),
+        "started_at": row["started_at"].astimezone(UTC).isoformat(),
     }, 200
-    

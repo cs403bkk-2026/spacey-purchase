@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -18,11 +18,14 @@ from purchase.member import is_valid_email, is_valid_password
     ],
 )
 def test_booking_price_examples(hourly_rate_cents, seconds, expected_cents):
-    start = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2030, 1, 1, tzinfo=UTC)
 
-    assert calculate_booking_price_cents(
-        hourly_rate_cents, start, start + timedelta(seconds=seconds)
-    ) == expected_cents
+    assert (
+        calculate_booking_price_cents(
+            hourly_rate_cents, start, start + timedelta(seconds=seconds)
+        )
+        == expected_cents
+    )
 
 
 @pytest.mark.parametrize(

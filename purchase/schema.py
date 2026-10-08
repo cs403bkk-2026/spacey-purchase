@@ -74,9 +74,7 @@ def create_tables(cur) -> None:
         "ADD COLUMN IF NOT EXISTS end_time TIMESTAMPTZ"
     )
     # Price charged at booking time, so a later price change can't rewrite past revenue.
-    cur.execute(
-        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_cents INTEGER"
-    )
+    cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_cents INTEGER")
     # Links a booking to the account that was logged in when it was made
     # (#134, the first concrete step of #86). NULL for a guest booking
     # made while logged out, and for every booking made before this.
@@ -86,9 +84,7 @@ def create_tables(cur) -> None:
     )
     # Last 4 digits only (#119) - never the full card number or CVC.
     # NULL until the booking is actually paid.
-    cur.execute(
-        "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS card_last4 TEXT"
-    )
+    cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS card_last4 TEXT")
     # When the booking was made (not when the space is used), so the
     # dashboard can show growth over time. Bookings made before this
     # column existed get the time the column was added - the best we

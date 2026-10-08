@@ -40,6 +40,8 @@ def pay_from_confirmation(booking_id):
         )
     if status >= 400:
         return redirect(
-            url_for("booking_confirmation", booking_id=booking_id, error=payload["error"])
+            url_for(
+                "booking_confirmation", booking_id=booking_id, error=payload["error"]
+            )
         )
     return redirect(url_for("booking_confirmation", booking_id=booking_id))

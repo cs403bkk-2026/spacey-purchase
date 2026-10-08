@@ -4,9 +4,7 @@
 def is_valid_capacity(capacity) -> bool:
     # bool is a subclass of int in Python, so rule out true/false
     return (
-        isinstance(capacity, int)
-        and not isinstance(capacity, bool)
-        and capacity >= 1
+        isinstance(capacity, int) and not isinstance(capacity, bool) and capacity >= 1
     )
 
 
@@ -109,9 +107,7 @@ def delete_space(cur, space_id):
     Returns (payload, status) - payload is None once deleted."""
     if get_space(cur, space_id) is None:
         return {"error": "space not found"}, 404
-    cur.execute(
-        "SELECT 1 FROM bookings WHERE space_id = %s LIMIT 1", (space_id,)
-    )
+    cur.execute("SELECT 1 FROM bookings WHERE space_id = %s LIMIT 1", (space_id,))
     if cur.fetchone() is not None:
         return {"error": "space has bookings, cancel them first"}, 409
     cur.execute("DELETE FROM spaces WHERE id = %s", (space_id,))
@@ -123,7 +119,6 @@ def seed_starter_space(cur) -> None:
     cur.execute("SELECT COUNT(*) AS count FROM spaces")
     if cur.fetchone()["count"] == 0:
         cur.execute(
-            "INSERT INTO spaces (name, capacity, price_cents) "
-            "VALUES (%s, %s, %s)",
+            "INSERT INTO spaces (name, capacity, price_cents) VALUES (%s, %s, %s)",
             ("Founders Desk", 1, 2500),  # $25.00 per hour
         )

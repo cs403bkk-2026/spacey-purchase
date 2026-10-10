@@ -20,11 +20,11 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           if ! grep -Eq '^(feat|fix|refactor|perf|test|docs|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: [^ ].*$' <<<"$TITLE"; then
-            echo "::error::PR title must be a Conventional Commit, e.g. 'feat(purchase): add the booking endpoints (PUR-003)'"
+            echo "::error::PR title must be a Conventional Commit, e.g. 'feat(purchase): serve the booking endpoints (PUR-002)'"
             exit 1
           fi
           if ! grep -Eq '^(feature|fix|refactor|perf|test|docs|build|ci|chore|revert)/[a-z0-9._-]+$' <<<"$BRANCH"; then
-            echo "::error::Branch must be <type>/<name>, e.g. 'feature/pur-003-booking-endpoints'"
+            echo "::error::Branch must be <type>/<name>, e.g. 'feature/pur-002-serve-routes'"
             exit 1
           fi
 

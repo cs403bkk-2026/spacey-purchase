@@ -6,7 +6,8 @@
     "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] }
   },
   "bypass_actors": [
-    { "actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always" }
+    { "actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
+    { "actor_id": 117247797, "actor_type": "User", "bypass_mode": "always" }
   ],
   "rules": [
     { "type": "deletion" },

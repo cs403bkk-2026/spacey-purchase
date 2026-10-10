@@ -1,23 +1,35 @@
 ---
 name: Ticket
-about: One tracer-bullet slice of the spec, pickable by an agent via /implement
+about: One piece of the plan (a sub-issue of PUR-000), done in one or more PRs
+title: "PUR-NNN: <imperative>"
 ---
 
-<!-- Title: a present-tense behaviour sentence, e.g. "Walking into a Zone runs its Script, once". -->
+**Phase N** · Part of PUR-000 (#3) · Depends on: <!-- #N merged, or "nothing" --> · PRs: <!-- number -->
 
-## What to build
+## Files
 
-<!-- The end-to-end behaviour this ticket makes work, from the Player's or author's view — not a layer-by-layer list. -->
+| File | Change | Notes |
+|---|---|---|
+| `purchase/…` | add / edit / delete | |
 
-## Blocked by
+## Why
 
-<!-- One bullet per blocker with why it gates this one, e.g. "- #6 PUR-003: Create only Purchase tables through versioned migrations -->
-- None (can start immediately)
+<!-- The problem, in two or three sentences. -->
 
-## Architecture notes
+## What to do
 
-<!-- The docs/spec/spec.md section and docs/adr/ entries this ticket must respect, plus any constraint an implementer needs. -->
+### PR 1: `<type>(purchase): <title> (PUR-NNN)`
 
-## Acceptance criteria
+- [ ] …
 
-- [ ] 
+## Tests
+
+<!-- One line each: `test_name`: given …, when …, then …. -->
+
+## Done when
+
+- [ ] <!-- a command and its expected output -->
+
+## Not in scope
+
+- …

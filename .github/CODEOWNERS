@@ -1,0 +1,4 @@
+# The last matching line wins. Owners need write access; the purchase team has it.
+*               @cs403bkk-2026/purchase
+/openapi.yaml   @Thanakritp3b @Aomsub101
+/docs/adr/      @Thanakritp3b @Aomsub101

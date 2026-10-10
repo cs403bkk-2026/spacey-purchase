@@ -1,6 +1,6 @@
 # Coding standards
 
-Judgement-call rules for review, adapted from Robert C. Martin's *Clean Code* (1st edition, chapter in brackets). Mechanical rules (formatting, import order, unused imports and names, outdated syntax) are enforced by Ruff (`uv run ruff check .` and `uv run ruff format --check .`, configured in `pyproject.toml`), and the reviewer already carries Fowler's smell baseline, which covers the book's ch. 17. This file adds only what neither covers. Where a rule differs from the book, it says so. Each rule ends with a case this repo has actually hit.
+Judgement-call rules for review, adapted from Robert C. Martin's *Clean Code* (1st edition, chapter in brackets). Mechanical rules (formatting, import order, unused imports and names, outdated syntax, naming case, commented-out code) are enforced by Ruff (`uv run ruff check .` and `uv run ruff format --check .`, configured in `pyproject.toml`), and the reviewer already carries Fowler's smell baseline, which covers the book's ch. 17. This file adds only what neither covers. Where a rule differs from the book, it says so. Each rule ends with a case this repo has actually hit.
 
 The rules apply to new and changed code. Fix an existing violation when you touch that code, not in a separate sweep.
 
@@ -39,7 +39,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 - **Comment only a why the code can't carry.** Good reasons are a Python gotcha, a race condition, a security consequence or an ADR. A function's name carries the what. *Hit:* "bool is a subclass of int in Python, so rule out true/false".
 - **Docstrings state the return contract when the name can't.** Say what comes back, for success and failure, as in `Returns (payload, status) - the new space, or an {"error": ...}.`
 - **Delete-test every comment.** If removing it loses no information the code doesn't already carry, it's restating: cut it.
-- **History belongs to git.** Ticket and issue numbers, "added for X" and "previously Y" go in commit messages and ADRs, not comments. *Hit:* `schema.py` cites `(#171)`, `(#134, the first concrete step of #86)` and `(#119)`. Those are `spacey` issues, but from this repository they link to issues here.
+- **History belongs to git.** Ticket and issue numbers (including `PUR-NNN`), "added for X" and "previously Y" go in PR titles, commit messages and ADRs, not comments. *Hit:* `schema.py` cites `(#171)`, `(#134, the first concrete step of #86)` and `(#119)`. Those are `spacey` issues, but from this repository they link to issues here.
 - **No commented-out code and no banner or position-marker comments.**
 
 ## Objects and data structures [ch. 6]
@@ -52,6 +52,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 - **Expected failures are return values.** Domain functions return `({"error": "..."}, status)` for bad input (400), missing rows (404) and conflicts (409). *Differs from the book:* the book prefers exceptions to error codes. Here, the status code is part of every result and the route passes it through unchanged.
 - **Catch database exceptions narrowly, at the statement that raises them.** Wrap only the `execute` that can fail, catch the specific exception and map it to a status. *Hit:* `except UniqueViolation` around the `INSERT` in `register_user`, and `except (DeadlockDetected, ExclusionViolation)` around the `INSERT` in `create_booking`.
+- **Every error body is `{"error": "<message>"}`.** The frontend shows that string as it is. Only a missing or wrong login answers `401`: the frontend logs the user out on any other `401`. *Hit:* `/me/bookings` answers `401` without a session; `/login` answers `401` for a wrong password.
 - **Error messages tell the caller what to fix.** Write them lower-case and naming the field and the rule. Never include internal detail. *Hit:* `"party_size must be a whole number of at least 1"`; a database failure returns only `"payment unavailable"`.
 - **Never log or store what could leak card or SQL data.** Log the outcome and ids, not the exception, since database diagnostics can include SQL parameters. Store only a card's last 4 digits. *Hit:* `mark_booking_paid` logs `outcome=database_error` and stores `card_number[-4:]`.
 
@@ -59,7 +60,8 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 - **Routes have no business rules and no SQL.** A route parses the request, calls one domain function and shapes the response. *Hit:* the module docstring of `purchase/api.py` sets this rule.
 - **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected.
-- **Other services are black boxes behind one call each.** Purchase reaches Payment and Access only through their APIs (ADR 0001). Keep each to a single call site, so moving it to HTTP changes one place. *Hit:* `authorize_card` is the only Payment call.
+- **Purchase calls no other service.** `spacey` is the hub: it calls each service in turn and passes on the facts the next one needs. Our functions take everything they need as arguments and never reach Payment or Access themselves. *Hit:* `mark_booking_paid` imports `payment.services.authorize_card`; that call leaves Purchase when Payment owns `/pay`.
+- **`openapi.yaml` is the contract.** A change to a path, method, status or body updates `openapi.yaml` in the same PR. A breaking change follows [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages-and-pr-titles).
 
 ## Tests [ch. 9]
 
@@ -67,11 +69,13 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 - **Test behaviour through the HTTP API.** Use `create_app().test_client()`, not a mocked cursor, so the SQL is exercised too.
 - **One behaviour per test, named as a sentence.** Name tests like `test_health_reports_local_revision_when_unset`. Separate arrange, act and assert with blank lines.
 - **A new rule, default or error branch gets a test in the same change.**
+- **Flows that depend on another service are tested with each of its answers.** Tests never call another service. Feed every answer it can give into our endpoint instead. *Hit:* a payment that succeeded, failed, is unknown or was refunded.
 
 ## Systems [ch. 11]
 
 - **The app is built by `create_app()`.** Importing a module has no side effects: no connections and no reading config at import time. Config comes from environment variables with a working local default. *Hit:* `/health` reads `APP_REVISION` per request, falling back to `"local"`, so tests can set it with `monkeypatch`.
-- **Schema changes are additive until PUR-008.** `spacey` still runs its own schema on the same database (ADR 0001), so use `CREATE ... IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`. Never drop or rename. Every statement must be safe to run on every start.
+- **Schema changes are migrations.** Each change is a new numbered SQL file, applied once and in order. Never edit or renumber a merged file; take the next free number when you rebase. *Hit:* `schema.py` reruns every statement on every start and records nothing, so it cannot drop or replace anything safely.
+- **Old data arrives only through the migration script.** The rules that map old values to new ones (a column, a status) are written down next to the script and tested, never patched into application code.
 
 ## Concurrency [ch. 13]
 

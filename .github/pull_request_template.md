@@ -1,5 +1,5 @@
 <!--
-Title = the commit on main: `<type>(purchase): <what it does> (PUR-NNN)`, e.g. `feat(purchase): add the create-booking endpoint (PUR-003)`.
+Title = the commit on main: `<type>(purchase): <what it does> (PUR-NNN)`, e.g. `feat(purchase): serve Purchase's API from this service (PUR-002)`.
 Breaking API change: `feat(purchase)!: …` and a `BREAKING CHANGE: …` line below. See CONTRIBUTING.md.
 -->
 

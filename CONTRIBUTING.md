@@ -26,9 +26,9 @@ We use **gitflow with `main` as the development branch**:
 
 | Prefix | For | Example |
 |---|---|---|
-| `feature/` | new behaviour | `feature/pur-003-booking-endpoints` |
-| `fix/` | a bug fix | `fix/pur-007-overlap-check` |
-| `refactor/` | a change with no behaviour change | `refactor/pur-002-move-routes` |
+| `feature/` | new behaviour | `feature/pur-003-run-once-migrations` |
+| `fix/` | a bug fix | `fix/pur-004-pay-once` |
+| `refactor/` | a change with no behaviour change | `refactor/pur-012-metrics-module` |
 | `test/` | tests only | `test/pur-004-payment-outcomes` |
 | `docs/` | documentation only | `docs/contributing` |
 | `ci/`, `build/`, `chore/`, `perf/`, `revert/` | CI, image and dependencies, upkeep, speed, undoing a merge | `chore/update-flask` |
@@ -53,13 +53,13 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
 Examples:
 
 ```
-feat(purchase): add the create-booking endpoint (PUR-003)
-fix(purchase): reject a party size of zero (PUR-005)
-refactor(purchase): move parsing out of the routes (PUR-002)
+feat(purchase): create the Purchase database through run-once migrations (PUR-003)
+fix(purchase): record a payment only once (PUR-004)
+refactor(purchase): move compute_metrics into purchase/metrics.py (PUR-012)
 ci: run the tests against Postgres
 ```
 
-**Breaking change** to our public API (a path, method, status or body that a caller relies on): add `!` before the colon and a `BREAKING CHANGE:` line in the PR body. For example, `feat(purchase)!: answer 410 on subscribe (PUR-006)`.
+**Breaking change** to our public API (a path, method, status or body that a caller relies on): add `!` before the colon and a `BREAKING CHANGE:` line in the PR body. For example, `feat(purchase)!: answer 410 on subscribe (PUR-001)`.
 
 Commits inside your branch are yours to name. Following the same format helps reviewers but is not checked.
 
@@ -146,7 +146,7 @@ This repository is **public**.
 
 ## Issues
 
-- Ticket titles are `PUR-NNN: <imperative>` (for example `PUR-003: Serve bookings from this service`). Use the *Ticket* template.
+- Ticket titles are `PUR-NNN: <imperative>` (for example `PUR-003: Create the Purchase database through run-once migrations`). Use the *Ticket* template.
 - Each ticket has a header line (phase, parent, depends on, PRs), a **Files** table, Why, What to do per PR, Tests, Done when and Not in scope.
 - Label a ticket `blocked` while it waits on another ticket.
 

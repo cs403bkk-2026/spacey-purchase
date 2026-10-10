@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conventional Commit title and typed branch name (CONTRIBUTING.md)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if ! grep -Eq '^(feat|fix|refactor|perf|test|docs|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: [^ ].*$' <<<"$TITLE"; then
+            echo "::error::PR title must be a Conventional Commit, e.g. 'feat(purchase): serve the booking endpoints (PUR-002)'"
+            exit 1
+          fi
+          if ! grep -Eq '^(feature|fix|refactor|perf|test|docs|build|ci|chore|revert)/[a-z0-9._-]+$' <<<"$BRANCH"; then
+            echo "::error::Branch must be <type>/<name>, e.g. 'feature/pur-002-serve-routes'"
+            exit 1
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv lock --check
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # ponytail: scans the whole history on every run (seconds today); limit it to the PR's commits if it gets slow
+      - run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git --log-opts=--all /repo
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -t purchase-ci .
+      - name: /health reports this revision, as the release smoke test checks
+        run: |
+          docker run -d --name smoke -p 8000:8000 purchase-ci
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 5 localhost:8000/health |
+              jq -e --arg r "$GITHUB_SHA" '.status == "ok" and .revision == $r'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs smoke
+          exit 1

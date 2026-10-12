@@ -8,7 +8,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 ## Names [ch. 2]
 
-- **Use the API's own words.** Name a concept with the term `openapi.yaml` uses: space, booking, member, user, subscription. Keep a **member** (the name a booking is stored under, `"guest"` by default) apart from a **user** (a registered account, `user_id`). *Hit:* `create_booking` takes both `member` and `user_id`, and they mean different things.
+- **Use the API's own words.** Name a concept with the term `openapi.yaml` uses: space, booking, member, user. Keep a **member** (the name a booking is stored under, `"guest"` by default) apart from a **user** (a registered account, `user_id`). *Hit:* `create_booking` takes both `member` and `user_id`, and they mean different things.
 - **Near-identical names must not hide different jobs.** If two names differ by one word, the shorter one must not do less in a way the name hides. *Hit:* `mark_paid` only flips the row to paid; `mark_booking_paid` authorises the card, logs and handles already-paid bookings.
 - **One verb per concept.** Stick to the verbs the codebase already uses:
 
@@ -27,7 +27,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 ## Functions [ch. 3]
 
-- **One level of abstraction per function.** A domain function reads as a list of named steps: look up, validate, check for conflicts, write. Pull an inline calculation out into a named function or variable. *Hit:* `create_booking` decides between `0` and `calculate_booking_price_cents(...)` inside the `INSERT` parameter tuple.
+- **One level of abstraction per function.** A domain function reads as a list of named steps: look up, validate, check for conflicts, write. Pull an inline calculation out into a named function or variable. *Hit:* `create_booking` once chose between `0` and `calculate_booking_price_cents(...)` inside the `INSERT` parameter tuple.
 - **Do one thing.** A function either answers a question or changes state (command-query separation). When it has to do both, the name says both.
 - **The cursor comes first, and the caller owns it.** Domain functions take `cur` as their first argument. They never open a connection, commit or close. The route owns `with current_app.db.cursor()`.
 - **No flag arguments.** A boolean that picks between two behaviours means there are two functions. *Differs from the book:* a flag that is part of the public API passes straight through as a keyword argument. *Hit:* `force_failure` goes from the request body to `authorize_card`.
@@ -46,7 +46,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 - **Rows stay plain dicts.** Database rows come back as dicts. Don't wrap them in a class unless it adds behaviour. *Differs from the book:* the book prefers objects that hide their data.
 - **Every query on a table returns the same shape.** Select the module's column constant (`BOOKING_COLUMNS`, `SPACE_COLUMNS`), not a hand-written column list.
-- **Convert to wire format in one place per resource.** Domain functions return rows. The `*_to_json` function turns timestamps into UTC ISO 8601, and only the route calls it. *Hit:* `subscribe` formats `started_at` itself, while bookings use `booking_to_json` in the route.
+- **Convert to wire format in one place per resource.** Domain functions return rows. The `*_to_json` function turns timestamps into UTC ISO 8601, and only the route calls it. *Hit:* `create_booking` returns the raw row, and `booking_to_json` turns its times into strings.
 
 ## Error handling [ch. 7]
 
@@ -80,4 +80,4 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 ## Concurrency [ch. 13]
 
 - **Every check-then-write has a database constraint behind it.** An application pre-check gives a clear error in the common case. Only a constraint stops two simultaneous requests. *Hit:* the overlap pre-check in `create_booking` is backed by the `no_overlapping_bookings` exclusion constraint, and the race is caught as `ExclusionViolation`.
-- **A write a client may retry is idempotent.** *Hit:* paying an already-paid booking returns it with `200` and charges nothing; `subscribe` uses `ON CONFLICT ... DO UPDATE`.
+- **A write a client may retry is idempotent.** *Hit:* paying an already-paid booking returns it with `200` and charges nothing.

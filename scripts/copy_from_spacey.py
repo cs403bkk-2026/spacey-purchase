@@ -1,0 +1,386 @@
+"""Copy spacey's Purchase data from its old tables into the new database.
+
+Usage:
+    copy_from_spacey.py OLD_URL NEW_URL (--dry-run | --apply | --verify)
+
+OLD_URL is spacey's database, which holds the old tables. NEW_URL is the
+Purchase database, built by the service's migrations.
+
+Modes:
+    --dry-run  Print what a copy would do, and write nothing. Exits 1 when a
+               booking is an anomaly.
+    --apply    Copy old into new in one transaction. Refuses, writing
+               nothing, unless scripts/freeze.sql ran on OLD_URL and no
+               booking is an anomaly. A second run inserts nothing.
+    --verify   Print VERIFY OK and exit 0 when new holds every old row with
+               its mapped values. Otherwise print each difference and exit 1.
+               Run it right after --apply, before the switch adds rows.
+
+Copy mapping (old -> new):
+    users, spaces, subscriptions   same rows, same keys
+    booking paid = true            status 'completed', including those a
+                                   subscription covered (0, no card)
+    booking paid = false, made     status 'expired'
+      15 minutes or more before
+      the copy (old's clock)
+    booking paid = false, newer    status 'pending'
+    other booking columns          as they are
+    NULL start, end or amount,     anomaly: --apply refuses
+      or end <= start
+    access, payments               never read
+    id sequence last value         new sequence = GREATEST(current,
+                                   last value + 100000)
+
+--verify accepts one drift: a booking the mapping makes 'expired' that new
+still has as 'pending'. Its hold ran out after --apply, and the service
+expires it at its next read.
+
+Logins:
+    --dry-run and --verify only read, so this is enough on both databases:
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO <role>;
+        GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO <role>;
+    Table grants do not cover sequences.
+    --apply writes the new database. scripts/freeze.sql and
+    scripts/unfreeze.sql need the old tables' owner.
+"""
+
+import argparse
+from collections import Counter
+from datetime import datetime, timedelta
+
+import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row
+
+HOLD = timedelta(minutes=15)  # rule SP-R07, the same hold the service applies
+SEQUENCE_GAP = 100000
+
+# Each table's columns, key first. The tables are in foreign-key order.
+OLD_COLUMNS = {
+    "users": ("id", "email", "password_hash", "created_at"),
+    "spaces": ("id", "name", "capacity", "price_cents"),
+    "subscriptions": ("member", "active", "started_at"),
+    "bookings": (
+        "id",
+        "space_id",
+        "member",
+        "user_id",
+        "start_time",
+        "end_time",
+        "amount_cents",
+        "paid",
+        "card_last4",
+        "created_at",
+    ),
+}
+NEW_COLUMNS = {
+    **OLD_COLUMNS,
+    "bookings": tuple(
+        "status" if column == "paid" else column for column in OLD_COLUMNS["bookings"]
+    ),
+}
+SEQUENCE_TABLES = ("users", "spaces", "bookings")
+
+# The freeze is on only when all 6 rows come back: both triggers on each of
+# users, spaces and bookings.
+FREEZE_TRIGGERS = """
+SELECT tgrelid::regclass::text AS table_name, tgname
+FROM pg_trigger
+WHERE tgname IN ('purchase_frozen', 'purchase_frozen_truncate')
+  AND tgenabled <> 'D'
+  AND tgrelid::regclass::text IN ('users', 'spaces', 'bookings')
+"""
+FROZEN_TRIGGER_COUNT = 6
+
+# 0 when the sequence has handed out no id yet.
+SEQUENCE_LAST_VALUE = """
+SELECT COALESCE(pg_sequence_last_value(
+    pg_get_serial_sequence(%s, 'id')::regclass), 0) AS value
+"""
+RAISE_SEQUENCE = """
+SELECT setval(pg_get_serial_sequence(%(table)s, 'id')::regclass, GREATEST(
+    COALESCE(pg_sequence_last_value(
+        pg_get_serial_sequence(%(table)s, 'id')::regclass), 0),
+    %(floor)s)) AS value
+"""
+
+
+def map_booking(row: dict, now: datetime) -> dict:
+    """Old booking row -> new booking row. now: old's clock at the copy."""
+    new = {k: v for k, v in row.items() if k != "paid"}
+    if row["paid"]:
+        new["status"] = "completed"
+    elif row["created_at"] <= now - HOLD:
+        new["status"] = "expired"
+    else:
+        new["status"] = "pending"
+    return new
+
+
+def anomaly(row: dict) -> str | None:
+    """Why the new schema would refuse this old booking, or None."""
+    for column in ("start_time", "end_time", "amount_cents"):
+        if row[column] is None:
+            return f"{column} is NULL"
+    if row["end_time"] <= row["start_time"]:
+        return "end_time <= start_time"
+    return None
+
+
+def list_anomalies(bookings: dict) -> list[str]:
+    return [
+        f"anomaly booking {booking_id}: {reason}"
+        for booking_id, row in bookings.items()
+        if (reason := anomaly(row))
+    ]
+
+
+def calculate_new_sequence(old_last: int, new_last: int) -> int:
+    return max(new_last, old_last + SEQUENCE_GAP)
+
+
+def connect_read_only(url: str) -> psycopg.Connection:
+    """One read-only REPEATABLE READ transaction: every read sees the same
+    moment."""
+    conn = psycopg.connect(url, row_factory=dict_row)
+    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    conn.read_only = True
+    return conn
+
+
+def read_tables(conn, columns: dict) -> dict:
+    """Every row of each table, as {table: {key: row}}."""
+    tables = {}
+    for table, names in columns.items():
+        query = sql.SQL("SELECT {} FROM {} ORDER BY {}").format(
+            sql.SQL(", ").join(map(sql.Identifier, names)),
+            sql.Identifier(table),
+            sql.Identifier(names[0]),
+        )
+        tables[table] = {row[names[0]]: row for row in conn.execute(query)}
+    return tables
+
+
+def read_sequences(conn) -> dict:
+    return {
+        table: conn.execute(SEQUENCE_LAST_VALUE, (table,)).fetchone()["value"]
+        for table in SEQUENCE_TABLES
+    }
+
+
+def read_old(url: str) -> dict:
+    """The old tables, their sequences, whether the freeze is on and now(),
+    from one snapshot on old's clock."""
+    with connect_read_only(url) as conn:
+        triggers = conn.execute(FREEZE_TRIGGERS).fetchall()
+        return {
+            "tables": read_tables(conn, OLD_COLUMNS),
+            "sequences": read_sequences(conn),
+            "frozen": len(triggers) == FROZEN_TRIGGER_COUNT,
+            "now": conn.execute("SELECT now() AS now").fetchone()["now"],
+        }
+
+
+def read_new(url: str) -> dict:
+    with connect_read_only(url) as conn:
+        return {
+            "tables": read_tables(conn, NEW_COLUMNS),
+            "sequences": read_sequences(conn),
+        }
+
+
+def mapped_tables(old: dict) -> dict:
+    """The old rows in the new shape, as {table: {key: row}}."""
+    bookings = {
+        booking_id: map_booking(row, old["now"])
+        for booking_id, row in old["tables"]["bookings"].items()
+    }
+    return {**old["tables"], "bookings": bookings}
+
+
+def dry_run(old: dict, new: dict) -> int:
+    """Prints the counts a copy would give; returns 1 when a booking is an
+    anomaly, else 0."""
+    for table in OLD_COLUMNS:
+        print(
+            f"rows {table}: old {len(old['tables'][table])}, "
+            f"new {len(new['tables'][table])}"
+        )
+    bookings = mapped_tables(old)["bookings"].values()
+    statuses = Counter(booking["status"] for booking in bookings)
+    future_slots = sum(
+        1
+        for booking in bookings
+        if booking["status"] == "expired"
+        and booking["end_time"] is not None
+        and booking["end_time"] > old["now"]
+    )
+    print(f"paid=true -> completed {statuses['completed']}")
+    print(
+        f"paid=false -> expired {statuses['expired']} "
+        f"({future_slots} future slots free)"
+    )
+    print(f"paid=false -> pending {statuses['pending']}")
+    for table in SEQUENCE_TABLES:
+        old_last, new_last = old["sequences"][table], new["sequences"][table]
+        print(
+            f"sequence {table}: old {old_last}, new {new_last} "
+            f"(apply sets {calculate_new_sequence(old_last, new_last)})"
+        )
+    problems = list_anomalies(old["tables"]["bookings"])
+    if problems:
+        print("\n".join(problems))
+        return 1
+    print("anomalies: none")
+    return 0
+
+
+def insert_rows(conn, table: str, rows) -> int:
+    """Inserts each row unless it clashes with one already there; returns
+    how many were inserted."""
+    columns = NEW_COLUMNS[table]
+    query = sql.SQL("INSERT INTO {} ({}) VALUES ({}) ON CONFLICT DO NOTHING").format(
+        sql.Identifier(table),
+        sql.SQL(", ").join(map(sql.Identifier, columns)),
+        sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+    )
+    return sum(
+        conn.execute(query, [row[column] for column in columns]).rowcount
+        for row in rows
+    )
+
+
+def apply(old: dict, new_url: str) -> int:
+    """Copies old into new in one transaction; returns 0, or 1 when it
+    refused and wrote nothing."""
+    if not old["frozen"]:
+        # A booking can be paid until the freeze, and a second --apply never
+        # updates a row already copied.
+        print("refused: old is not frozen (run scripts/freeze.sql on OLD_URL)")
+        return 1
+    problems = list_anomalies(old["tables"]["bookings"])
+    if problems:
+        print("\n".join(problems))
+        return 1
+    with psycopg.connect(new_url, row_factory=dict_row) as conn:
+        inserted = {
+            table: insert_rows(conn, table, rows.values())
+            for table, rows in mapped_tables(old).items()
+        }
+        sequences = {
+            table: conn.execute(
+                RAISE_SEQUENCE,
+                {"table": table, "floor": old["sequences"][table] + SEQUENCE_GAP},
+            ).fetchone()["value"]
+            for table in SEQUENCE_TABLES
+        }
+    for table, count in inserted.items():
+        print(f"{table}: inserted {count}")
+    for table, value in sequences.items():
+        print(f"sequence {table}: {value}")
+    return 0
+
+
+def accept_ran_out_hold(want: dict, stored: dict | None) -> dict:
+    """want, but pending when new still has it pending and only the mapping
+    says expired: its hold ran out after --apply."""
+    if (
+        want["status"] == "expired"
+        and stored is not None
+        and stored["status"] == "pending"
+    ):
+        return {**want, "status": "pending"}
+    return want
+
+
+def count_differences(want: dict, stored: dict) -> list[str]:
+    lines = [
+        f"count {table}: new {len(stored[table])}, want {len(rows)}"
+        for table, rows in want.items()
+        if len(stored[table]) != len(rows)
+    ]
+    want_statuses = Counter(row["status"] for row in want["bookings"].values())
+    stored_statuses = Counter(row["status"] for row in stored["bookings"].values())
+    lines += [
+        f"count bookings {status}: new {stored_statuses[status]}, "
+        f"want {want_statuses[status]}"
+        for status in sorted(want_statuses | stored_statuses)
+        if stored_statuses[status] != want_statuses[status]
+    ]
+    return lines
+
+
+def row_differences(want: dict, stored: dict) -> list[str]:
+    lines = []
+    for table, rows in want.items():
+        for key, row in rows.items():
+            stored_row = stored[table].get(key)
+            if stored_row is None:
+                lines.append(f"{table} {key}: missing in new")
+                continue
+            lines += [
+                f"{table} {key}: {column} is {stored_row[column]}, want {value}"
+                for column, value in row.items()
+                if stored_row[column] != value
+            ]
+    return lines
+
+
+def sequence_differences(old: dict, new: dict) -> list[str]:
+    return [
+        f"sequence {table}: new {new[table]} < old {old[table]} + {SEQUENCE_GAP}"
+        for table in SEQUENCE_TABLES
+        if new[table] < old[table] + SEQUENCE_GAP
+    ]
+
+
+def verify(old: dict, new: dict) -> int:
+    """Prints VERIFY OK and returns 0 when new holds old under the mapping;
+    else prints each difference and returns 1."""
+    want = mapped_tables(old)
+    stored = new["tables"]
+    want["bookings"] = {
+        booking_id: accept_ran_out_hold(booking, stored["bookings"].get(booking_id))
+        for booking_id, booking in want["bookings"].items()
+    }
+    differences = [
+        *count_differences(want, stored),
+        *row_differences(want, stored),
+        *sequence_differences(old["sequences"], new["sequences"]),
+    ]
+    if differences:
+        print("\n".join(differences))
+        return 1
+    print("VERIFY OK")
+    return 0
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="copy_from_spacey.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("old_url", metavar="OLD_URL", help="spacey's database")
+    parser.add_argument("new_url", metavar="NEW_URL", help="the Purchase database")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="count, write nothing")
+    mode.add_argument("--apply", action="store_true", help="copy old into new")
+    mode.add_argument("--verify", action="store_true", help="check new against old")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Runs the chosen mode; returns the exit code."""
+    args = parse_args(argv)
+    old = read_old(args.old_url)
+    if args.apply:
+        return apply(old, args.new_url)
+    new = read_new(args.new_url)
+    if args.dry_run:
+        return dry_run(old, new)
+    return verify(old, new)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

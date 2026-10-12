@@ -1,7 +1,9 @@
-"""Copy spacey's Purchase data from its old tables into the new database.
+"""Copy spacey's Purchase data from its old tables into the new database,
+and repair the old tables from the new database.
 
 Usage:
-    copy_from_spacey.py OLD_URL NEW_URL (--dry-run | --apply | --verify)
+    copy_from_spacey.py OLD_URL NEW_URL (--dry-run | --apply | --verify |
+                                         --repair)
 
 OLD_URL is spacey's database, which holds the old tables. NEW_URL is the
 Purchase database, built by the service's migrations.
@@ -15,6 +17,10 @@ Modes:
     --verify   Print VERIFY OK and exit 0 when new holds every old row with
                its mapped values. Otherwise print each difference and exit 1.
                Run it right after --apply, before the switch adds rows.
+    --repair   Make the old tables match new under the mirror rules, in one
+               old-DB transaction that sets the mirror flag. Refuses, writing
+               nothing, unless scripts/freeze.sql ran on OLD_URL. A second
+               run changes nothing.
 
 Copy mapping (old -> new):
     users, spaces, subscriptions   same rows, same keys
@@ -35,13 +41,36 @@ Copy mapping (old -> new):
 still has as 'pending'. Its hold ran out after --apply, and the service
 expires it at its next read.
 
+Mirror rules (new -> old), which the mirror and --repair both follow:
+    users row                      same id and email. The mirror hashes the
+                                   same password itself, so the hash
+                                   differs, but both verify
+    spaces row                     same row, same id
+    booking 'pending'              row with paid = false
+    booking 'completed'            row with paid = true and its card_last4
+    booking 'expired'              stays an unpaid row until an overlapping
+                                   booking on the same space either holds
+                                   its slot ('pending' or 'completed') or
+                                   has a higher id. Then it is deleted, and
+                                   nothing puts it back: old's overlap
+                                   constraint counts every row
+    booking 'cancelled'            row deleted, with its access code
+    subscriptions                  untouched
+    id sequences                   the mirror never moves them; --repair
+                                   moves each to GREATEST(old, new)
+
+A paid old row is never deleted for a newer booking. So on the old tables,
+the booking count and the unpaid count leave out each expired hold whose
+slot was booked again. The paid count and revenue equal the service's
+/metrics.
+
 Logins:
     --dry-run and --verify only read, so this is enough on both databases:
         GRANT SELECT ON ALL TABLES IN SCHEMA public TO <role>;
         GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO <role>;
     Table grants do not cover sequences.
-    --apply writes the new database. scripts/freeze.sql and
-    scripts/unfreeze.sql need the old tables' owner.
+    --apply writes the new database. scripts/freeze.sql,
+    scripts/unfreeze.sql and --repair need the old tables' owner.
 """
 
 import argparse
@@ -103,6 +132,29 @@ SELECT setval(pg_get_serial_sequence(%(table)s, 'id')::regclass, GREATEST(
         pg_get_serial_sequence(%(table)s, 'id')::regclass), 0),
     %(floor)s)) AS value
 """
+
+# The bookings the old table should hold, under the mirror rules. The overlap
+# test is the one old's constraint uses: start < other end and end > other start.
+MIRRORED_BOOKINGS = """
+SELECT id, space_id, member, user_id, start_time, end_time, amount_cents,
+       status = 'completed' AS paid, card_last4, created_at
+FROM bookings b
+WHERE status IN ('pending', 'completed')
+   OR (status = 'expired' AND NOT EXISTS (
+       SELECT 1 FROM bookings x
+       WHERE x.space_id = b.space_id AND x.id <> b.id
+         AND x.start_time < b.end_time AND x.end_time > b.start_time
+         AND (x.status IN ('pending', 'completed') OR x.id > b.id)))
+"""
+
+# The columns --repair compares on a row both sides hold. It inserts every
+# column, so a user's password_hash and created_at are written only once: the
+# mirror hashes the same password itself, and the hashes differ.
+REPAIR_COMPARED_COLUMNS = {
+    "users": ("email",),
+    "spaces": ("name", "capacity", "price_cents"),
+    "bookings": OLD_COLUMNS["bookings"][1:],
+}
 
 
 def map_booking(row: dict, now: datetime) -> dict:
@@ -355,6 +407,90 @@ def verify(old: dict, new: dict) -> int:
     return 0
 
 
+def insert_row(conn, table: str, row: dict) -> None:
+    query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+        sql.Identifier(table),
+        sql.SQL(", ").join(map(sql.Identifier, row)),
+        sql.SQL(", ").join(sql.Placeholder() * len(row)),
+    )
+    conn.execute(query, list(row.values()))
+
+
+def update_row(conn, table: str, row: dict, columns: tuple) -> None:
+    query = sql.SQL("UPDATE {} SET {} WHERE id = %s").format(
+        sql.Identifier(table),
+        sql.SQL(", ").join(
+            sql.SQL("{} = %s").format(sql.Identifier(column)) for column in columns
+        ),
+    )
+    conn.execute(query, [*(row[column] for column in columns), row["id"]])
+
+
+def delete_rows(conn, table: str, ids) -> int:
+    """Deletes the rows with these ids; returns how many it deleted."""
+    query = sql.SQL("DELETE FROM {} WHERE id = ANY(%s)").format(sql.Identifier(table))
+    return conn.execute(query, (sorted(ids),)).rowcount
+
+
+def upsert_rows(conn, table: str, want: dict, have: dict) -> tuple[int, int]:
+    """Inserts each wanted row old lacks, and updates each one whose compared
+    columns differ; returns (inserted, updated)."""
+    compared = REPAIR_COMPARED_COLUMNS[table]
+    inserted = updated = 0
+    for key in sorted(want):
+        row = want[key]
+        if key not in have:
+            insert_row(conn, table, row)
+            inserted += 1
+        elif any(row[column] != have[key][column] for column in compared):
+            update_row(conn, table, row, compared)
+            updated += 1
+    return inserted, updated
+
+
+def read_mirror_source(url: str) -> dict:
+    """New's users, spaces, the bookings old should hold, and the sequences,
+    from one snapshot."""
+    with connect_read_only(url) as conn:
+        tables = read_tables(conn, {t: OLD_COLUMNS[t] for t in ("users", "spaces")})
+        tables["bookings"] = {row["id"]: row for row in conn.execute(MIRRORED_BOOKINGS)}
+        return {"tables": tables, "sequences": read_sequences(conn)}
+
+
+def repair(old_url: str, new_url: str) -> int:
+    """Makes the old tables match new under the mirror rules, in one old-DB
+    transaction; returns 0."""
+    upserted = {}
+    with psycopg.connect(old_url, row_factory=dict_row) as conn:
+        conn.execute("SET LOCAL purchase.mirror = 'on'")
+        # Mirror writes wait for this lock, so a service write the snapshot
+        # below misses reaches old after this commits, and is not undone.
+        conn.execute("LOCK TABLE users, spaces, bookings IN EXCLUSIVE MODE")
+        new = read_mirror_source(new_url)
+        old = read_tables(conn, {t: OLD_COLUMNS[t] for t in SEQUENCE_TABLES})
+        old_sequences = read_sequences(conn)
+        want = new["tables"]
+        gone = {table: old[table].keys() - want[table].keys() for table in old}
+        # Before any insert: old's overlap constraint counts every row.
+        deleted = {"bookings": delete_rows(conn, "bookings", gone["bookings"])}
+        for table in SEQUENCE_TABLES:
+            upserted[table] = upsert_rows(conn, table, want[table], old[table])
+        for table in ("spaces", "users"):
+            deleted[table] = delete_rows(conn, table, gone[table])
+        for table in SEQUENCE_TABLES:
+            if new["sequences"][table] > old_sequences[table]:
+                conn.execute(
+                    "SELECT setval(pg_get_serial_sequence(%s, 'id')::regclass, %s)",
+                    (table, new["sequences"][table]),
+                )
+    for table in SEQUENCE_TABLES:
+        inserted, updated = upserted[table]
+        print(
+            f"{table}: inserted {inserted}, updated {updated}, deleted {deleted[table]}"
+        )
+    return 0
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="copy_from_spacey.py",
@@ -367,6 +503,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument("--dry-run", action="store_true", help="count, write nothing")
     mode.add_argument("--apply", action="store_true", help="copy old into new")
     mode.add_argument("--verify", action="store_true", help="check new against old")
+    mode.add_argument("--repair", action="store_true", help="make old match new")
     return parser.parse_args(argv)
 
 
@@ -374,6 +511,13 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the chosen mode; returns the exit code."""
     args = parse_args(argv)
     old = read_old(args.old_url)
+    if args.repair:
+        if not old["frozen"]:
+            # Unfrozen old tables mean spacey writes them itself, and the
+            # repair would delete those writes.
+            print("refused: --repair needs OLD_URL frozen (run scripts/freeze.sql)")
+            return 1
+        return repair(args.old_url, args.new_url)
     if args.apply:
         return apply(old, args.new_url)
     new = read_new(args.new_url)

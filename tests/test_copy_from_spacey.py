@@ -57,6 +57,10 @@ def old_url(make_db):
 def new_url(make_db, monkeypatch):
     """An empty, migrated Purchase database: no starter space."""
     monkeypatch.delenv("SEED_STARTER_SPACE", raising=False)
+    return make_migrated_db(make_db)
+
+
+def make_migrated_db(make_db) -> str:
     url = make_db()
     with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
         run_migrations(conn)
@@ -479,3 +483,187 @@ def test_spacey_start_up_runs_on_frozen_tables(old_url):
         create_tables(cur)
 
     assert table_rows(old_url) == before
+
+
+def make_changes(url):
+    """In new after a copy: a new user, a new space with a pending booking,
+    and booking 3 paid with card 4242."""
+    execute(
+        url,
+        "INSERT INTO users (email, password_hash) VALUES ('cy@example.com', 'hash-cy')",
+    )
+    space = fetch(
+        url,
+        "INSERT INTO spaces (name, capacity, price_cents) "
+        "VALUES ('Room 4', 2, 3000) RETURNING id",
+    )[0]["id"]
+    insert_new_booking(url, space, at(10), at(11), "pending")
+    execute(
+        url,
+        "UPDATE bookings SET status = 'completed', card_last4 = '4242' WHERE id = 3",
+    )
+
+
+def insert_new_booking(url, space_id, start, end, status) -> int:
+    return fetch(
+        url,
+        "INSERT INTO bookings (space_id, member, start_time, end_time, "
+        "amount_cents, status) VALUES (%s, 'cy', %s, %s, 2500, %s) RETURNING id",
+        (space_id, start, end, status),
+    )[0]["id"]
+
+
+def set_status(url, booking_id, status):
+    execute(url, "UPDATE bookings SET status = %s WHERE id = %s", (status, booking_id))
+
+
+def old_bookings_from_noon(url) -> list:
+    """(id, paid) of old's bookings on space 1 from 12:00, booking 3's slot."""
+    rows = fetch(
+        url,
+        "SELECT id, paid FROM bookings WHERE space_id = 1 AND start_time >= %s "
+        "ORDER BY id",
+        (at(12),),
+    )
+    return [(row["id"], row["paid"]) for row in rows]
+
+
+def as_old_booking(row) -> dict:
+    old = {k: v for k, v in row.items() if k != "status"}
+    old["paid"] = row["status"] == "completed"
+    return old
+
+
+NOTHING_REPAIRED = [
+    "users: inserted 0, updated 0, deleted 0",
+    "spaces: inserted 0, updated 0, deleted 0",
+    "bookings: inserted 0, updated 0, deleted 0",
+]
+
+
+def test_repair_refuses_unless_old_is_frozen(old_url, new_url, capsys):
+    copy(old_url, new_url)
+    make_changes(new_url)
+    run_sql_file(old_url, "unfreeze.sql")
+    capsys.readouterr()
+    before = table_rows(old_url)
+
+    code, lines = run(capsys, old_url, new_url, "--repair")
+
+    assert code == 1
+    assert lines == ["refused: --repair needs OLD_URL frozen (run scripts/freeze.sql)"]
+    assert table_rows(old_url) == before
+
+
+def test_repair_copies_new_and_changed_rows(old_url, new_url, capsys):
+    copy(old_url, new_url)
+    make_changes(new_url)
+
+    assert main([old_url, new_url, "--repair"]) == 0
+
+    old, new = table_rows(old_url), table_rows(new_url)
+    assert old["users"] == new["users"]
+    assert old["spaces"] == new["spaces"]
+    assert old["bookings"] == [as_old_booking(row) for row in new["bookings"]]
+    assert [row["paid"] for row in old["bookings"]] == [True, True, True, False]
+    assert old["bookings"][2]["card_last4"] == "4242"
+
+
+def test_repair_keeps_an_expired_hold_until_its_slot_is_taken(old_url, new_url):
+    copy(old_url, new_url)
+    set_status(new_url, 3, "expired")
+
+    assert main([old_url, new_url, "--repair"]) == 0
+    assert old_bookings_from_noon(old_url) == [(3, False)]
+
+    newer = insert_new_booking(new_url, 1, at(12), at(13), "expired")
+    assert main([old_url, new_url, "--repair"]) == 0
+    assert old_bookings_from_noon(old_url) == [(newer, False)]
+
+    set_status(new_url, 3, "completed")
+    assert main([old_url, new_url, "--repair"]) == 0
+    assert old_bookings_from_noon(old_url) == [(3, True)]
+
+
+def test_repair_frees_a_cancelled_slot(old_url, new_url):
+    copy(old_url, new_url)
+    set_status(new_url, 3, "cancelled")
+    newer = insert_new_booking(new_url, 1, at(12), at(13), "pending")
+
+    assert main([old_url, new_url, "--repair"]) == 0
+
+    assert old_bookings_from_noon(old_url) == [(newer, False)]
+
+
+def test_repair_deletes_rows_gone_from_new(old_url, new_url):
+    copy(old_url, new_url)
+    execute(new_url, "DELETE FROM bookings WHERE space_id = 3")
+    execute(new_url, "DELETE FROM spaces WHERE id = 3")
+
+    assert main([old_url, new_url, "--repair"]) == 0
+
+    old = table_rows(old_url)
+    assert [row["id"] for row in old["spaces"]] == [1]
+    assert [row["id"] for row in old["bookings"]] == [1, 3]
+
+
+def test_repair_compares_a_users_email_only(old_url, new_url, capsys):
+    copy(old_url, new_url)
+    execute_as_mirror(old_url, "UPDATE users SET password_hash = 'rehashed'")
+    capsys.readouterr()
+
+    code, lines = run(capsys, old_url, new_url, "--repair")
+
+    assert code == 0
+    assert "users: inserted 0, updated 0, deleted 0" in lines
+
+
+def test_repair_leaves_subscriptions_alone(old_url, new_url):
+    copy(old_url, new_url)
+    execute(new_url, "DELETE FROM subscriptions WHERE member = 'bob'")
+
+    assert main([old_url, new_url, "--repair"]) == 0
+
+    members = fetch(old_url, "SELECT member FROM subscriptions ORDER BY member")
+    assert members == [{"member": "ann"}, {"member": "bob"}]
+
+
+def test_second_repair_changes_nothing(old_url, new_url, capsys):
+    copy(old_url, new_url)
+    make_changes(new_url)
+    assert main([old_url, new_url, "--repair"]) == 0
+    capsys.readouterr()
+
+    code, lines = run(capsys, old_url, new_url, "--repair")
+
+    assert code == 0
+    assert lines == NOTHING_REPAIRED
+
+
+def test_old_ids_continue_above_new_ones(old_url, new_url):
+    copy(old_url, new_url)
+    make_changes(new_url)
+    assert main([old_url, new_url, "--repair"]) == 0
+    run_sql_file(old_url, "unfreeze.sql")
+
+    inserted = fetch(
+        old_url,
+        "INSERT INTO bookings (space_id, member, start_time, end_time, "
+        "amount_cents, paid) VALUES (1, 'dee', %s, %s, 2500, FALSE) RETURNING id",
+        (at(14), at(15)),
+    )[0]["id"]
+
+    new_ids = [row["id"] for row in fetch(new_url, "SELECT id FROM bookings")]
+    assert inserted > max(new_ids)
+
+
+def test_repair_then_apply_into_an_empty_db_verifies(old_url, new_url, make_db, capsys):
+    copy(old_url, new_url)
+    make_changes(new_url)
+    assert main([old_url, new_url, "--repair"]) == 0
+    third_url = make_migrated_db(make_db)
+
+    assert main([old_url, third_url, "--apply"]) == 0
+    capsys.readouterr()
+
+    assert run(capsys, old_url, third_url, "--verify") == (0, ["VERIFY OK"])

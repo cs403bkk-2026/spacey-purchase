@@ -21,14 +21,16 @@ def booked_space_ids(cur, window) -> set:
     if window is None:
         cur.execute(
             "SELECT DISTINCT space_id FROM bookings "
-            "WHERE start_time <= now() AND end_time > now()"
+            "WHERE start_time <= now() AND end_time > now() "
+            "AND status IN ('pending', 'completed')"
         )
     else:
         start_time, end_time = window
         # Same overlap rule as booking creation: back-to-back is not a clash.
         cur.execute(
             "SELECT DISTINCT space_id FROM bookings "
-            "WHERE start_time < %s AND end_time > %s",
+            "WHERE start_time < %s AND end_time > %s "
+            "AND status IN ('pending', 'completed')",
             (end_time, start_time),
         )
     return {row["space_id"] for row in cur.fetchall()}

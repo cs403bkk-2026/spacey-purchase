@@ -1,18 +1,13 @@
-"""HTTP routes for Purchase.
-
-Request parsing, session handling and response shaping live here so the
-Purchase package can become its own service.
-"""
+"""HTTP routes of the Purchase service. Each route parses the request, calls
+one domain function and shapes the response - no business rules or SQL here."""
 
 from datetime import datetime
 
-from flask import Blueprint, current_app, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request
 
-from access import issue_access_code
 import purchase.booking
 import purchase.member
 import purchase.space
-from purchase.metrics import compute_metrics
 
 purchase_bp = Blueprint("purchase", __name__)
 
@@ -45,6 +40,7 @@ def parse_window(args) -> tuple[tuple | None, str | None]:
 
 
 def json_body():
+    """The request's JSON object; any other body (none, 42, a list) counts as {}."""
     body = request.get_json(silent=True)
     return body if isinstance(body, dict) else {}
 
@@ -59,25 +55,22 @@ def register():
     return jsonify(payload), status
 
 
-@purchase_bp.post("/login")
-def login():
+@purchase_bp.post("/users/authenticate")
+def authenticate():
+    """Checks a login for the hub, which keeps the session; sets no cookie."""
     body = json_body()
     with current_app.db.cursor() as cur:
         payload, status = purchase.member.authenticate(
             cur, body.get("email"), body.get("password")
         )
-    # Wrong password and unknown email give the identical error, so a
-    # failed attempt can't be used to find out which emails are registered.
-    if status == 200:
-        session["user_id"] = payload["id"]
     return jsonify(payload), status
 
 
-@purchase_bp.post("/logout")
-def logout():
-    # Idempotent: logging out when already logged out just does nothing.
-    session.pop("user_id", None)
-    return jsonify(status="ok")
+@purchase_bp.get("/users/<int:user_id>/bookings")
+def list_user_bookings(user_id):
+    with current_app.db.cursor() as cur:
+        rows = purchase.booking.list_user_bookings(cur, user_id)
+    return jsonify(bookings=[purchase.booking.booking_to_json(row) for row in rows])
 
 
 @purchase_bp.get("/spaces")
@@ -90,6 +83,16 @@ def list_spaces():
         booked_ids = purchase.space.booked_space_ids(cur, window)
     spaces = [{**row, "available": row["id"] not in booked_ids} for row in rows]
     return jsonify(spaces=spaces)
+
+
+@purchase_bp.get("/spaces/booked-ids")
+def booked_space_ids():
+    window, error = parse_window(request.args)
+    if error:
+        return jsonify(error=error), 400
+    with current_app.db.cursor() as cur:
+        booked_ids = purchase.space.booked_space_ids(cur, window)
+    return jsonify(space_ids=sorted(booked_ids))
 
 
 @purchase_bp.post("/spaces")
@@ -148,14 +151,17 @@ def create_booking(space_id):
     end_time = parse_time(body.get("end_time"))
     if start_time is None or end_time is None:
         return jsonify(
-            error="start_time and end_time are required "
-            "(ISO 8601 with timezone)"
+            error="start_time and end_time are required (ISO 8601 with timezone)"
         ), 400
     with current_app.db.cursor() as cur:
-        # Linked to the account if one is logged in; NULL for a guest.
         payload, status = purchase.booking.create_booking(
-            cur, space_id, body.get("member"), start_time, end_time,
-            body.get("party_size", 1), session.get("user_id"),
+            cur,
+            space_id,
+            body.get("member"),
+            start_time,
+            end_time,
+            body.get("party_size", 1),
+            body.get("user_id"),
         )
     if status == 201:
         payload = purchase.booking.booking_to_json(payload)
@@ -166,18 +172,6 @@ def create_booking(space_id):
 def list_bookings():
     with current_app.db.cursor() as cur:
         rows = purchase.booking.list_bookings(cur)
-    return jsonify(bookings=[purchase.booking.booking_to_json(row) for row in rows])
-
-
-@purchase_bp.get("/me/bookings")
-def list_my_bookings():
-    """The logged-in account's bookings, so the client never has to
-    fetch everyone's and filter them itself."""
-    user_id = session.get("user_id")
-    if user_id is None:
-        return jsonify(error="log in to see your bookings"), 401
-    with current_app.db.cursor() as cur:
-        rows = purchase.booking.list_user_bookings(cur, user_id)
     return jsonify(bookings=[purchase.booking.booking_to_json(row) for row in rows])
 
 
@@ -197,36 +191,3 @@ def cancel_booking(booking_id):
     if row is None:
         return jsonify(error="booking not found"), 404
     return jsonify(purchase.booking.booking_to_json(row))
-
-
-@purchase_bp.post("/bookings/<int:booking_id>/pay")
-def pay_booking(booking_id):
-    body = json_body()
-    with current_app.db.cursor() as cur:
-        payload, status = purchase.booking.mark_booking_paid(
-            cur, booking_id, body.get("card_number"), body.get("expiry"),
-            body.get("cvc"), force_failure=body.get("force_failure") is True,
-        )
-    if status == 200:
-        payload = purchase.booking.booking_to_json(payload)
-    return jsonify(payload), status
-
-
-@purchase_bp.post("/bookings/<int:booking_id>/unlock")
-def unlock_booking(booking_id):
-    payload, status = issue_access_code(booking_id)
-    return jsonify(payload), status
-
-
-@purchase_bp.post("/members/<name>/subscribe")
-def subscribe_member(name):
-    with current_app.db.cursor() as cur:
-        payload, status = purchase.member.subscribe(cur, name)
-    return jsonify(payload), status
-
-
-@purchase_bp.get("/metrics")
-def metrics():
-    with current_app.db.cursor() as cur:
-        data = compute_metrics(cur)
-    return jsonify(**data)

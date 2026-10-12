@@ -1,12 +1,18 @@
-from datetime import date, datetime, timedelta, timezone
+import os
+from datetime import UTC, datetime, timedelta
 
+import purchase.booking
 from app import create_app
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
-def make_client():
-    return create_app(reset_on_start=True).test_client()
+def make_client(reset=True):
+    client = create_app().test_client()
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {os.environ['PURCHASE_TOKEN']}"
+    if reset:  # with the test defaults: empty tables, then space 1 "Founders Desk"
+        assert client.post("/test/reset").status_code == 204
+    return client
 
 
 def slot(start_hours, end_hours):
@@ -17,20 +23,18 @@ def slot(start_hours, end_hours):
     }
 
 
-VALID_CARD = {
-    "card_number": "4242424242424242",
-    "expiry": f"12/{(date.today().year + 1) % 100:02d}",
-    "cvc": "123",
-}
-
-
 def register(client, email="annabel@example.com", password="hunter22"):
     return client.post("/register", json={"email": email, "password": password})
 
 
 def login(client, email="annabel@example.com", password="hunter22"):
-    return client.post("/login", json={"email": email, "password": password})
+    return client.post(
+        "/users/authenticate", json={"email": email, "password": password}
+    )
 
 
-def pay(client, booking_id):
-    return client.post(f"/bookings/{booking_id}/pay", json=VALID_CARD)
+def pay(client, booking_id, card_last4="4242"):
+    """Record a payment as Payment's /pay handler will: through mark_paid."""
+    with client.application.db.cursor() as cur:
+        row = purchase.booking.mark_paid(cur, booking_id, card_last4)
+    return purchase.booking.booking_to_json(row)

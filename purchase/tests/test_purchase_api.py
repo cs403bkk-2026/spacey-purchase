@@ -1,9 +1,63 @@
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from purchase_helpers import login, make_client, pay, register, slot
 
 from app import create_app
-from purchase_helpers import NOW, VALID_CARD, login, make_client, pay, register, slot
+
+# The service's routes. PUR-018, PUR-019 and PUR-020 add theirs here.
+CONTRACT = {
+    "GET /spaces",
+    "POST /spaces",
+    "GET /spaces/booked-ids",
+    "GET /spaces/<int:space_id>",
+    "PATCH /spaces/<int:space_id>",
+    "DELETE /spaces/<int:space_id>",
+    "GET /spaces/<int:space_id>/bookings",
+    "POST /spaces/<int:space_id>/bookings",
+    "GET /bookings",
+    "GET /bookings/<int:booking_id>",
+    "DELETE /bookings/<int:booking_id>",
+    "POST /register",
+    "POST /users/authenticate",
+    "GET /users/<int:user_id>/bookings",
+}
+
+# One request per route in CONTRACT, against space 1 or 2, booking 1, user 1.
+ROUTES = [
+    ("GET", "/spaces", None),
+    ("POST", "/spaces", {"name": "Meeting Room A", "capacity": 6}),
+    ("GET", "/spaces/booked-ids", None),
+    ("GET", "/spaces/1", None),
+    ("PATCH", "/spaces/1", {"name": "Renamed"}),
+    ("DELETE", "/spaces/2", None),
+    ("GET", "/spaces/1/bookings", None),
+    ("POST", "/spaces/1/bookings", {"member": "gregory", **slot(3, 4)}),
+    ("GET", "/bookings", None),
+    ("GET", "/bookings/1", None),
+    ("DELETE", "/bookings/1", None),
+    ("POST", "/register", {"email": "gregory@example.com", "password": "hunter22"}),
+    (
+        "POST",
+        "/users/authenticate",
+        {"email": "annabel@example.com", "password": "hunter22"},
+    ),
+    ("GET", "/users/1/bookings", None),
+]
+
+BOOKING_KEYS = {
+    "id",
+    "space_id",
+    "member",
+    "paid",
+    "start_time",
+    "end_time",
+    "amount_cents",
+    "user_id",
+    "card_last4",
+    "created_at",
+}
 
 
 def test_three_hours_cost_three_times_one_hour():
@@ -56,7 +110,9 @@ def test_an_uneven_duration_is_rounded_to_whole_cents():
 
 def test_booking_responses_include_the_amount_charged():
     client = make_client()
-    client.post("/spaces", json={"name": "Meeting Room A", "capacity": 6, "price_cents": 1500})
+    client.post(
+        "/spaces", json={"name": "Meeting Room A", "capacity": 6, "price_cents": 1500}
+    )
 
     created = client.post(
         "/spaces/2/bookings", json={"member": "annabel", **slot(1, 2)}
@@ -66,8 +122,11 @@ def test_booking_responses_include_the_amount_charged():
     # every other place a booking shows up agrees with what was charged
     assert client.get(f"/bookings/{created['id']}").get_json()["amount_cents"] == 1500
     assert client.get("/bookings").get_json()["bookings"][0]["amount_cents"] == 1500
-    assert client.get("/spaces/2/bookings").get_json()["bookings"][0]["amount_cents"] == 1500
-    paid = pay(client, created['id']).get_json()
+    assert (
+        client.get("/spaces/2/bookings").get_json()["bookings"][0]["amount_cents"]
+        == 1500
+    )
+    paid = pay(client, created["id"])
     assert paid["amount_cents"] == 1500
     cancelled = client.delete(f"/bookings/{created['id']}").get_json()
     assert cancelled["amount_cents"] == 1500
@@ -75,7 +134,9 @@ def test_booking_responses_include_the_amount_charged():
 
 def test_a_price_change_after_booking_does_not_change_the_amount_shown():
     client = make_client()
-    client.post("/spaces", json={"name": "Meeting Room A", "capacity": 6, "price_cents": 500})
+    client.post(
+        "/spaces", json={"name": "Meeting Room A", "capacity": 6, "price_cents": 500}
+    )
     created = client.post(
         "/spaces/2/bookings", json={"member": "annabel", **slot(1, 2)}
     ).get_json()
@@ -98,7 +159,7 @@ def test_list_spaces_returns_the_seed_space():
                 "name": "Founders Desk",
                 "capacity": 1,
                 "price_cents": 2500,
-                "available": True
+                "available": True,
             }
         ]
     }
@@ -107,9 +168,7 @@ def test_list_spaces_returns_the_seed_space():
 def test_create_space_adds_a_new_space():
     client = make_client()
 
-    response = client.post(
-        "/spaces", json={"name": "Meeting Room A", "capacity": 6}
-    )
+    response = client.post("/spaces", json={"name": "Meeting Room A", "capacity": 6})
 
     assert response.status_code == 201
     assert response.get_json() == {
@@ -251,7 +310,7 @@ def test_create_booking_for_unknown_space_returns_404():
         "/spaces/999/bookings", json={"member": "annabel", **slot(1, 2)}
     )
 
-    #404 to reject booking a space that doesn't exist
+    # 404 to reject booking a space that doesn't exist
     assert response.status_code == 404
     assert response.get_json() == {"error": "space not found"}
 
@@ -296,7 +355,7 @@ def test_concurrent_bookings_for_the_same_slot_only_one_succeeds():
     # actually exercises the race (see issue #50) rather than just the
     # single-connection check-then-insert code path.
     client_a = make_client()
-    client_b = create_app(reset_on_start=False).test_client()
+    client_b = make_client(reset=False)
 
     booking = {"member": "racer", **slot(1, 2)}
     results = [None, None]
@@ -379,11 +438,11 @@ def test_booking_records_when_it_was_made():
     client = make_client()
 
     # a second of slack: the database clock and this one are not identical
-    before = datetime.now(timezone.utc) - timedelta(seconds=1)
+    before = datetime.now(UTC) - timedelta(seconds=1)
     created = client.post(
         "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
     ).get_json()
-    after = datetime.now(timezone.utc) + timedelta(seconds=1)
+    after = datetime.now(UTC) + timedelta(seconds=1)
 
     created_at = datetime.fromisoformat(created["created_at"])
     assert before <= created_at <= after
@@ -392,7 +451,7 @@ def test_booking_records_when_it_was_made():
 
     # and it survives being read back and paid
     assert client.get("/bookings/1").get_json()["created_at"] == created["created_at"]
-    paid = pay(client, 1).get_json()
+    paid = pay(client, 1)
     assert paid["created_at"] == created["created_at"]
 
 
@@ -432,76 +491,6 @@ def test_cancel_unknown_booking_returns_404():
     assert response.get_json() == {"error": "booking not found"}
 
 
-def test_unlock_before_paying_is_rejected():
-    client = make_client()
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)}
-    ).get_json()
-
-    response = client.post(f"/bookings/{created['id']}/unlock")
-
-    assert response.status_code == 402
-    assert response.get_json() == {"error": "booking is not paid"}
-
-
-def test_unlock_a_paid_booking_returns_an_access_code():
-    client = make_client()
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)}
-    ).get_json()
-    pay(client, created['id'])
-
-    response = client.post(f"/bookings/{created['id']}/unlock")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["booking_id"] == created["id"]
-    assert len(body["access_code"]) > 0
-
-
-def test_unlocking_twice_returns_the_same_stored_code():
-    client = make_client()
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)})
-    pay(client, 1)
-
-    first = client.post("/bookings/1/unlock").get_json()["access_code"]
-    second = client.post("/bookings/1/unlock").get_json()["access_code"]
-
-    assert first == second
-
-
-def test_the_access_code_survives_a_restart():
-    client = make_client()
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)})
-    pay(client, 1)
-    code = client.post("/bookings/1/unlock").get_json()["access_code"]
-
-    # a second app instance, same database - as after a redeploy
-    restarted = create_app(reset_on_start=False).test_client()
-
-    assert restarted.post("/bookings/1/unlock").get_json()["access_code"] == code
-
-
-def test_cancelling_a_booking_removes_its_access_code():
-    client = make_client()
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)})
-    pay(client, 1)
-    client.post("/bookings/1/unlock")
-
-    # the access row references the booking, so the delete has to cascade
-    assert client.delete("/bookings/1").status_code == 200
-    assert client.post("/bookings/1/unlock").status_code == 404
-
-
-def test_unlock_unknown_booking_returns_404():
-    client = make_client()
-
-    response = client.post("/bookings/999/unlock")
-
-    assert response.status_code == 404
-    assert response.get_json() == {"error": "booking not found"}
-
-
 def test_registering_creates_an_account():
     client = make_client()
 
@@ -518,11 +507,15 @@ def test_registering_creates_an_account():
 
 def test_registering_does_not_store_the_plain_password():
     client = make_client()
-    app = create_app(reset_on_start=False)
-    client.post("/register", json={"email": "annabel@example.com", "password": "hunter22"})
+    app = create_app()
+    client.post(
+        "/register", json={"email": "annabel@example.com", "password": "hunter22"}
+    )
 
     with app.db.cursor() as cur:
-        cur.execute("SELECT password_hash FROM users WHERE email = 'annabel@example.com'")
+        cur.execute(
+            "SELECT password_hash FROM users WHERE email = 'annabel@example.com'"
+        )
         stored = cur.fetchone()["password_hash"]
 
     assert stored != "hunter22"
@@ -531,7 +524,9 @@ def test_registering_does_not_store_the_plain_password():
 
 def test_registering_with_a_duplicate_email_is_rejected():
     client = make_client()
-    client.post("/register", json={"email": "annabel@example.com", "password": "hunter22"})
+    client.post(
+        "/register", json={"email": "annabel@example.com", "password": "hunter22"}
+    )
 
     # case shouldn't matter either
     response = client.post(
@@ -545,7 +540,14 @@ def test_registering_with_a_duplicate_email_is_rejected():
 def test_registering_with_a_bad_email_is_rejected():
     client = make_client()
 
-    for email in ["not-an-email", "missing-domain@", "@missing-local.com", "", None, 42]:
+    for email in [
+        "not-an-email",
+        "missing-domain@",
+        "@missing-local.com",
+        "",
+        None,
+        42,
+    ]:
         response = client.post(
             "/register", json={"email": email, "password": "hunter22"}
         )
@@ -579,7 +581,8 @@ def test_login_with_the_right_password_succeeds():
     register(client)
 
     response = client.post(
-        "/login", json={"email": "Annabel@Example.com", "password": "hunter22"}
+        "/users/authenticate",
+        json={"email": "Annabel@Example.com", "password": "hunter22"},
     )
 
     assert response.status_code == 200
@@ -591,7 +594,8 @@ def test_login_with_the_wrong_password_is_rejected():
     register(client)
 
     response = client.post(
-        "/login", json={"email": "annabel@example.com", "password": "wrong-password"}
+        "/users/authenticate",
+        json={"email": "annabel@example.com", "password": "wrong-password"},
     )
 
     assert response.status_code == 401
@@ -603,10 +607,12 @@ def test_login_with_an_unknown_email_gives_the_identical_error():
     register(client)
 
     known = client.post(
-        "/login", json={"email": "annabel@example.com", "password": "wrong-password"}
+        "/users/authenticate",
+        json={"email": "annabel@example.com", "password": "wrong-password"},
     )
     unknown = client.post(
-        "/login", json={"email": "nobody@example.com", "password": "hunter22"}
+        "/users/authenticate",
+        json={"email": "nobody@example.com", "password": "hunter22"},
     )
 
     # a wrong password and an unregistered email must look the same,
@@ -615,38 +621,14 @@ def test_login_with_an_unknown_email_gives_the_identical_error():
     assert known.get_json() == unknown.get_json()
 
 
-def test_logout_ends_the_session():
-    client = make_client()
-    register(client)
-    client.post("/login", json={"email": "annabel@example.com", "password": "hunter22"})
-
-    response = client.post("/logout")
-
-    assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
-
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-    assert created["user_id"] is None
-
-
-def test_logout_when_not_logged_in_is_a_no_op():
-    client = make_client()
-
-    response = client.post("/logout", json={})
-
-    assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
-
-
 def test_a_booking_made_while_logged_in_is_linked_to_the_account():
     client = make_client()
     register(client)
     user = login(client).get_json()
 
     created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": user["id"], **slot(1, 2)},
     ).get_json()
 
     assert created["user_id"] == user["id"]
@@ -663,28 +645,16 @@ def test_a_guest_booking_has_no_user_id():
     assert created["user_id"] is None
 
 
-def test_logging_out_before_booking_leaves_it_unlinked():
-    client = make_client()
-    register(client)
-    login(client)
-    client.post("/logout", json={})
-
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-
-    assert created["user_id"] is None
-
-
 def test_user_id_stays_on_the_booking_through_pay_and_list():
     client = make_client()
     register(client)
     user = login(client).get_json()
 
     created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": user["id"], **slot(1, 2)},
     ).get_json()
-    paid = pay(client, created['id']).get_json()
+    paid = pay(client, created["id"])
 
     assert paid["user_id"] == user["id"]
     assert client.get("/bookings").get_json()["bookings"][0]["user_id"] == user["id"]
@@ -694,31 +664,25 @@ def test_user_id_stays_on_the_booking_through_pay_and_list():
     )
 
 
-def test_my_bookings_json_needs_a_login():
-    client = make_client()
-
-    response = client.get("/me/bookings")
-
-    assert response.status_code == 401
-    assert response.get_json() == {"error": "log in to see your bookings"}
-
-
 def test_my_bookings_json_lists_only_the_logged_in_users_bookings():
     client = make_client()
     client.post("/spaces/1/bookings", json={"member": "guest", **slot(1, 2)})
     register(client, email="annabel@example.com")
     register(client, email="gregory@example.com")
 
-    login(client, email="annabel@example.com")
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(3, 4)})
-    client.post("/logout", json={})
+    annabel = login(client, email="annabel@example.com").get_json()
+    client.post(
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": annabel["id"], **slot(3, 4)},
+    )
 
-    login(client, email="gregory@example.com")
+    gregory = login(client, email="gregory@example.com").get_json()
     mine = client.post(
-        "/spaces/1/bookings", json={"member": "gregory", **slot(5, 6)}
+        "/spaces/1/bookings",
+        json={"member": "gregory", "user_id": gregory["id"], **slot(5, 6)},
     ).get_json()
 
-    response = client.get("/me/bookings")
+    response = client.get(f"/users/{gregory['id']}/bookings")
 
     assert response.status_code == 200
     assert response.get_json() == {"bookings": [mine]}
@@ -747,315 +711,6 @@ def test_booking_member_must_be_a_string():
     assert response.get_json() == {"error": "member must be a string"}
 
 
-def test_subscribing_returns_an_active_subscription():
-    client = make_client()
-
-    response = client.post("/members/annabel/subscribe")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["member"] == "annabel"
-    assert body["active"] is True
-    assert body["started_at"]
-
-
-def test_subscribing_twice_keeps_the_original_start():
-    client = make_client()
-    first = client.post("/members/annabel/subscribe").get_json()
-
-    second = client.post("/members/annabel/subscribe")
-
-    assert second.status_code == 200
-    assert second.get_json() == first
-
-
-def test_a_blank_member_name_cannot_subscribe():
-    client = make_client()
-
-    response = client.post("/members/%20/subscribe")
-
-    assert response.status_code == 400
-    assert response.get_json() == {"error": "member name must not be blank"}
-
-
-def test_a_subscribed_members_booking_is_paid_on_creation():
-    client = make_client()
-    client.post("/members/annabel/subscribe")
-
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)}
-    ).get_json()
-
-    assert created["paid"] is True
-    # no pay step needed to get the access code
-    unlock = client.post(f"/bookings/{created['id']}/unlock")
-    assert unlock.status_code == 200
-
-
-def test_a_member_without_a_subscription_still_pays_once():
-    client = make_client()
-    client.post("/members/annabel/subscribe")
-
-    created = client.post(
-        "/spaces/1/bookings", json={"member": "gregory", **slot(1, 2)}
-    ).get_json()
-
-    assert created["paid"] is False
-    paid = pay(client, created['id']).get_json()
-    assert paid["paid"] is True
-
-
-def test_subscription_matches_the_member_name_ignoring_case_and_spaces():
-    client = make_client()
-    client.post("/members/%20Annabel%20/subscribe")
-
-    lower = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-    shouting = client.post(
-        "/spaces/1/bookings", json={"member": "  ANNABEL ", **slot(3, 4)}
-    ).get_json()
-
-    assert lower["paid"] is True
-    assert shouting["paid"] is True
-
-
-def test_a_subscribers_booking_adds_no_per_booking_revenue():
-    client = make_client()
-    client.post(
-        "/spaces",
-        json={"name": "Meeting Room A", "capacity": 6, "price_cents": 1500},
-    )
-    client.post("/members/annabel/subscribe")
-
-    client.post("/spaces/2/bookings", json={"member": "annabel", **slot(1, 2)})
-    metrics = client.get("/metrics").get_json()
-
-    assert metrics["paid_bookings"] == 1
-    assert metrics["revenue_cents"] == 0
-
-
-def test_metrics_reports_spaces_bookings_and_members():
-    client = make_client()
-
-    client.post("/spaces", json={"name": "Meeting Room A", "capacity": 6})
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)})
-    client.post("/spaces/2/bookings", json={"member": "gregory", **slot(1, 2)})
-
-    response = client.get("/metrics")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["spaces"] == 2
-    assert body["bookings"] == 2
-    assert body["paid_bookings"] == 0
-    assert body["unpaid_bookings"] == 2
-    assert body["members"] == 2
-    assert body["revenue_cents"] == 0
-
-
-def test_metrics_splits_paid_and_unpaid_bookings():
-    client = make_client()
-    first = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-    client.post("/spaces/1/bookings", json={"member": "gregory", **slot(3, 4)})
-    client.post("/spaces/1/bookings", json={"member": "flurina", **slot(5, 6)})
-    pay(client, first['id'])
-
-    body = client.get("/metrics").get_json()
-
-    assert body["bookings"] == 3
-    assert body["paid_bookings"] == 1
-    assert body["unpaid_bookings"] == 2
-
-
-def test_metrics_with_no_bookings_reports_zero_for_each_count():
-    client = make_client()
-
-    body = client.get("/metrics").get_json()
-
-    assert body["bookings"] == 0
-    assert body["paid_bookings"] == 0
-    assert body["unpaid_bookings"] == 0
-
-
-def test_metrics_reports_revenue_from_paid_bookings():
-    client = make_client()
-
-    client.post(
-        "/spaces",
-        json={"name": "Meeting Room A", "capacity": 6, "price_cents": 1500},
-    )
-    booking = client.post(
-        "/spaces/2/bookings", json={"member": "gregory", **slot(1, 2)}
-    ).get_json()
-
-    # unpaid bookings bring in nothing yet
-    assert client.get("/metrics").get_json()["revenue_cents"] == 0
-
-    pay(client, booking['id'])
-    response = client.get("/metrics")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["revenue_cents"] == 1500
-
-
-def test_utilization_over_the_next_7_days():
-    client = make_client()
-    # Founders Desk (the only space) is booked for a clean 24 hours,
-    # fully inside the 7-day (168h) window.
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(1, 25)})
-
-    body = client.get("/metrics").get_json()
-
-    assert body["utilization"] == pytest.approx(24 / 168)
-
-
-def test_utilization_ignores_bookings_outside_the_next_7_days():
-    client = make_client()
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(200, 201)})
-
-    body = client.get("/metrics").get_json()
-
-    assert body["utilization"] == 0.0
-
-
-def test_utilization_is_zero_with_no_spaces():
-    client = make_client()
-    client.delete("/spaces/1")  # the only space, unbooked, so deletable
-
-    body = client.get("/metrics").get_json()
-
-    assert body["spaces"] == 0
-    assert body["utilization"] == 0.0
-
-
-def test_repeat_member_rate():
-    client = make_client()
-    client.post("/spaces", json={"name": "Room B", "capacity": 4})
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)})
-    client.post("/spaces/2/bookings", json={"member": "annabel", **slot(3, 4)})
-    client.post("/spaces/2/bookings", json={"member": "gregory", **slot(5, 6)})
-
-    body = client.get("/metrics").get_json()
-
-    assert body["members"] == 2
-    assert body["repeat_member_rate"] == pytest.approx(1 / 2)  # only annabel repeats
-
-
-def test_repeat_member_rate_is_zero_with_no_bookings():
-    client = make_client()
-
-    body = client.get("/metrics").get_json()
-
-    assert body["repeat_member_rate"] == 0.0
-
-
-def test_payment_conversion():
-    client = make_client()
-    first = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-    client.post("/spaces/1/bookings", json={"member": "gregory", **slot(3, 4)})
-    pay(client, first['id'])
-
-    body = client.get("/metrics").get_json()
-
-    assert body["payment_conversion"] == pytest.approx(0.5)
-
-
-def test_payment_conversion_is_zero_with_no_bookings():
-    client = make_client()
-
-    body = client.get("/metrics").get_json()
-
-    assert body["payment_conversion"] == 0.0
-
-
-def test_average_revenue_per_paid_booking():
-    client = make_client()
-    client.post(
-        "/spaces", json={"name": "Room B", "capacity": 4, "price_cents": 1000}
-    )
-    first = client.post(
-        "/spaces/2/bookings", json={"member": "annabel", **slot(1, 2)}
-    ).get_json()
-    second = client.post(
-        "/spaces/2/bookings", json={"member": "gregory", **slot(3, 4)}
-    ).get_json()
-    pay(client, first['id'])
-    pay(client, second['id'])
-
-    body = client.get("/metrics").get_json()
-
-    assert body["avg_revenue_cents_per_paid_booking"] == 1000
-
-
-def test_average_revenue_per_paid_booking_is_zero_with_no_paid_bookings():
-    client = make_client()
-
-    body = client.get("/metrics").get_json()
-
-    assert body["avg_revenue_cents_per_paid_booking"] == 0
-
-
-def test_revenue_by_space():
-    client = make_client()
-    client.post(
-        "/spaces", json={"name": "Room B", "capacity": 4, "price_cents": 1000}
-    )
-    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)})
-    paid = client.post(
-        "/spaces/2/bookings", json={"member": "gregory", **slot(3, 4)}
-    ).get_json()
-    pay(client, paid['id'])
-
-    body = client.get("/metrics").get_json()
-
-    by_id = {row["id"]: row for row in body["revenue_by_space"]}
-    assert by_id[1]["name"] == "Founders Desk"
-    assert by_id[1]["revenue_cents"] == 0  # unpaid
-    assert by_id[2]["name"] == "Room B"
-    assert by_id[2]["revenue_cents"] == 1000
-
-
-def test_revenue_by_space_includes_a_space_with_no_bookings():
-    client = make_client()
-
-    body = client.get("/metrics").get_json()
-
-    assert body["revenue_by_space"] == [
-        {"id": 1, "name": "Founders Desk", "revenue_cents": 0}
-    ]
-
-
-def test_startup_fills_in_the_amount_on_bookings_made_before_the_column_existed():
-    app = create_app(reset_on_start=True)
-    client = app.test_client()
-    client.post(
-        "/spaces",
-        json={"name": "Meeting Room A", "capacity": 6, "price_cents": 1500},
-    )
-    with app.db.cursor() as cur:
-        # a paid booking from before amount_cents existed, so it has no amount
-        cur.execute(
-            "INSERT INTO bookings (space_id, member, paid, start_time, end_time) "
-            "VALUES (2, 'old-member', TRUE, "
-            "now() + interval '1 day', now() + interval '2 days')"
-        )
-        cur.execute("SELECT amount_cents FROM bookings")
-        assert cur.fetchone()["amount_cents"] is None
-
-    create_app(reset_on_start=False)  # the next app start runs the backfill
-
-    with app.db.cursor() as cur:
-        cur.execute("SELECT amount_cents FROM bookings")
-        assert cur.fetchone()["amount_cents"] == 1500
-    assert client.get("/metrics").get_json()["revenue_cents"] == 1500
-
-
 def test_delete_unbooked_space_removes_it():
     client = make_client()
     created = client.post(
@@ -1076,9 +731,7 @@ def test_delete_space_with_bookings_is_rejected():
     response = client.delete("/spaces/1")
 
     assert response.status_code == 409
-    assert response.get_json() == {
-        "error": "space has bookings, cancel them first"
-    }
+    assert response.get_json() == {"error": "space has bookings, cancel them first"}
 
 
 def test_delete_unknown_space_returns_404():
@@ -1368,30 +1021,6 @@ def test_update_space_name_only_keeps_the_price():
     assert response.get_json()["price_cents"] == 500
 
 
-def test_changing_a_price_with_patch_only_affects_later_bookings():
-    client = make_client()
-    client.post(
-        "/spaces",
-        json={"name": "Meeting Room A", "capacity": 6, "price_cents": 500},
-    )
-    before = client.post(
-        "/spaces/2/bookings", json={"member": "gregory", **slot(1, 2)}
-    ).get_json()
-    pay(client, before['id'])
-    assert client.get("/metrics").get_json()["revenue_cents"] == 500
-
-    client.patch("/spaces/2", json={"price_cents": 2000})
-
-    # the booking made before the change keeps what it was charged
-    assert client.get("/metrics").get_json()["revenue_cents"] == 500
-
-    after = client.post(
-        "/spaces/2/bookings", json={"member": "annabel", **slot(3, 4)}
-    ).get_json()
-    pay(client, after['id'])
-    assert client.get("/metrics").get_json()["revenue_cents"] == 2500
-
-
 def test_update_unknown_space_returns_404():
     client = make_client()
 
@@ -1429,3 +1058,202 @@ def test_update_space_with_invalid_values_is_rejected():
     assert space["price_cents"] == 2500
 
 
+def snapshot(app):
+    """Every Purchase table's rows, to show a request changed nothing."""
+    return {
+        table: app.db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+        for table in ("users", "spaces", "bookings", "subscriptions")
+    }
+
+
+def stored_status(app, booking_id):
+    row = app.db.execute("SELECT status FROM bookings WHERE id = %s", (booking_id,))
+    return row.fetchone()["status"]
+
+
+def test_route_table_is_the_contract():
+    app = create_app()
+    adapter = app.url_map.bind("localhost")
+
+    routes = {
+        f"{method} {rule.rule}"
+        for rule in app.url_map.iter_rules()
+        if rule.endpoint != "static"
+        for method in rule.methods - {"HEAD", "OPTIONS"}
+    }
+    requested = {
+        f"{method} {adapter.match(path, method=method, return_rule=True)[0].rule}"
+        for method, path, _ in ROUTES
+    }
+
+    assert routes == CONTRACT | {"GET /health", "POST /test/reset"}
+    assert requested == CONTRACT
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"), ROUTES, ids=[f"{m} {p}" for m, p, _ in ROUTES]
+)
+def test_every_route_refuses_a_missing_token(method, path, body):
+    client = make_client()
+    client.post("/spaces", json={"name": "Spare Room", "capacity": 2})
+    user = register(client).get_json()
+    client.post(
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": user["id"], **slot(1, 2)},
+    )
+    before = snapshot(client.application)
+    without_token = client.application.test_client()
+
+    response = without_token.open(path, method=method, json=body)
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "invalid service token"}
+    assert snapshot(client.application) == before
+
+
+def test_authenticate_starts_no_session():
+    client = make_client()
+    register(client)
+
+    response = login(client)
+
+    assert response.status_code == 200
+    assert "Set-Cookie" not in response.headers
+
+
+def test_user_bookings_of_an_unknown_user_is_empty():
+    client = make_client()
+
+    response = client.get("/users/999/bookings")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"bookings": []}
+
+
+WINDOW_ERROR = (
+    "start_time and end_time must be given together "
+    "(ISO 8601 with timezone, e.g. 2026-09-25T09:00:00Z)"
+)
+
+
+@pytest.mark.parametrize(
+    ("query", "status", "body"),
+    [
+        ({}, 200, {"space_ids": [1]}),
+        (slot(0, 2), 200, {"space_ids": [1]}),
+        (slot(1, 2), 200, {"space_ids": []}),
+        ({"start_time": slot(1, 2)["start_time"]}, 400, {"error": WINDOW_ERROR}),
+        (
+            {"start_time": "2030-01-01T10:00:00", "end_time": "2030-01-01T11:00:00"},
+            400,
+            {"error": WINDOW_ERROR},
+        ),
+        (slot(1, 1), 400, {"error": "end_time must be after start_time"}),
+    ],
+    ids=["now", "overlapping", "touching", "start_only", "naive", "end_not_after"],
+)
+def test_booked_ids_examples(query, status, body):
+    client = make_client()
+    client.post("/spaces", json={"name": "Meeting Room A", "capacity": 6})
+    client.post("/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)})
+
+    response = client.get("/spaces/booked-ids", query_string=query)
+
+    assert response.status_code == status
+    assert response.get_json() == body
+
+
+@pytest.mark.parametrize(
+    "user_id", ["1", True, 1.5, {}], ids=['"1"', "true", "1.5", "{}"]
+)
+def test_create_booking_rejects_a_bad_user_id(user_id):
+    client = make_client()
+    register(client)
+
+    response = client.post(
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": user_id, **slot(1, 2)},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "user_id must be a whole number or null"}
+    assert client.get("/bookings").get_json() == {"bookings": []}
+
+
+@pytest.mark.parametrize("user_id", [999, 2**40, 2**70], ids=["999", "2**40", "2**70"])
+def test_create_booking_rejects_an_unknown_user_id(user_id):
+    client = make_client()
+    register(client)
+
+    response = client.post(
+        "/spaces/1/bookings",
+        json={"member": "annabel", "user_id": user_id, **slot(1, 2)},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "user_id is not a known account"}
+    assert client.get("/bookings").get_json() == {"bookings": []}
+
+
+@pytest.mark.parametrize("body", [42, True, "x", [1]], ids=["42", "true", '"x"', "[1]"])
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/spaces"),
+        ("PATCH", "/spaces/1"),
+        ("POST", "/spaces/1/bookings"),
+        ("POST", "/register"),
+        ("POST", "/users/authenticate"),
+    ],
+    ids=["create_space", "update_space", "create_booking", "register", "authenticate"],
+)
+def test_non_object_json_body_counts_as_empty(method, path, body):
+    client = make_client()
+    before = snapshot(client.application)
+    empty = client.open(path, method=method, json={})
+
+    response = client.open(path, method=method, json=body)
+
+    assert (response.status_code, response.get_json()) == (
+        empty.status_code,
+        empty.get_json(),
+    )
+    assert snapshot(client.application) == before
+
+
+def test_booking_json_keeps_paid_and_hides_status():
+    client = make_client()
+
+    created = client.post(
+        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
+    ).get_json()
+
+    assert set(created) == BOOKING_KEYS
+    assert created["paid"] is False
+    assert stored_status(client.application, created["id"]) == "pending"
+
+    paid = pay(client, created["id"])
+
+    assert set(paid) == BOOKING_KEYS
+    assert paid["paid"] is True
+    assert paid["card_last4"] == "4242"
+    assert stored_status(client.application, created["id"]) == "completed"
+
+
+def test_booking_times_with_an_offset_are_returned_in_utc():
+    client = make_client()
+    client.application.db.execute("SET TIME ZONE 'Asia/Bangkok'")
+
+    created = client.post(
+        "/spaces/1/bookings",
+        json={
+            "member": "annabel",
+            "start_time": "2030-01-01T10:00:00+07:00",
+            "end_time": "2030-01-01T11:00:00+07:00",
+        },
+    ).get_json()
+    found = client.get(f"/bookings/{created['id']}").get_json()
+
+    for booking in (created, found):
+        assert booking["start_time"] == "2030-01-01T03:00:00+00:00"
+        assert booking["end_time"] == "2030-01-01T04:00:00+00:00"

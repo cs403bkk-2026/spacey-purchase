@@ -45,14 +45,12 @@ A missing required setting or an unreachable database stops the start with a `Ru
 
 ```
 app.py              create_app(): settings, database, service token, /health
-purchase/           the Purchase domain (mirrored by spacey/purchase/)
+purchase/           the Purchase domain (spacey/purchase/ has the same functions)
 tests/              tests of the app
 openapi.yaml        the HTTP contract
 docs/adr/           architecture decisions
 docs/deployment.md  how a release is run, checked and rolled back
 deploy/             the Nomad job file
-spacey_app.py       verbatim copies of spacey files, kept as a reference
-tests/spacey_test_app.py   until their content has moved here
 ```
 
 ## Working here

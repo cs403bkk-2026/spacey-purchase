@@ -65,6 +65,14 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
             f"capacity of {space['capacity']}"
         }, 400
 
+    # The account the hub has logged in, or None for a guest booking.
+    if user_id is not None:
+        if not isinstance(user_id, int) or isinstance(user_id, bool):
+            return {"error": "user_id must be a whole number or null"}, 400
+        cur.execute("SELECT 1 FROM users WHERE id = %s", (user_id,))
+        if cur.fetchone() is None:
+            return {"error": "user_id is not a known account"}, 400
+
     # Overlap = starts before the other ends AND ends after the
     # other starts. Back-to-back bookings (10-11, 11-12) are allowed.
     cur.execute(

@@ -5,6 +5,7 @@ import psycopg
 from flask import Flask, jsonify, request
 from psycopg.rows import dict_row
 
+from purchase.api import purchase_bp
 from purchase.migrations import run_migrations
 from purchase.space import seed_starter_space
 
@@ -31,6 +32,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.db = connect(database_url)
     run_migrations(app.db)
+    app.register_blueprint(purchase_bp)
 
     @app.before_request
     def require_token():

@@ -109,7 +109,7 @@ def test_an_old_covered_booking_reads_paid_at_zero(cur):
 @pytest.mark.parametrize(
     "value,expected",
     [
-        ("2030-01-01T10:00:00+07:00", datetime(2030, 1, 1, 10, tzinfo=UTC)),
+        ("2030-01-01T10:00:00+07:00", datetime(2030, 1, 1, 3, tzinfo=UTC)),
         ("2030-01-01T03:00:00Z", datetime(2030, 1, 1, 3, tzinfo=UTC)),
         ("2030-01-01T10:00:00", None),
         ("tomorrow", None),
@@ -127,16 +127,42 @@ def test_parse_time_examples(value, expected):
     [
         ({}, None, None),
         (
-            {"start_time": "2030-01-01T10:00:00+07:00", "end_time": "2030-01-01T11:00:00+07:00"},
-            (datetime(2030, 1, 1, 10, tzinfo=timezone(timedelta(hours=7))),
-             datetime(2030, 1, 1, 11, tzinfo=timezone(timedelta(hours=7)))),
+            {
+                "start_time": "2030-01-01T10:00:00+07:00",
+                "end_time": "2030-01-01T11:00:00+07:00",
+            },
+            (
+                datetime(2030, 1, 1, 10, tzinfo=timezone(timedelta(hours=7))),
+                datetime(2030, 1, 1, 11, tzinfo=timezone(timedelta(hours=7))),
+            ),
             None,
         ),
         ({"start_time": "2030-01-01T10:00:00+07:00"}, None, "must be given together"),
         ({"end_time": "2030-01-01T11:00:00+07:00"}, None, "must be given together"),
-        ({"start_time": "2030-01-01T10:00:00", "end_time": "2030-01-01T11:00:00+07:00"}, None, "must be given together"),
-        ({"start_time": "2030-01-01T11:00:00+07:00", "end_time": "2030-01-01T10:00:00+07:00"}, None, "end_time must be after start_time"),
-        ({"start_time": "2030-01-01T10:00:00+07:00", "end_time": "2030-01-01T10:00:00+07:00"}, None, "end_time must be after start_time"),
+        (
+            {
+                "start_time": "2030-01-01T10:00:00",
+                "end_time": "2030-01-01T11:00:00+07:00",
+            },
+            None,
+            "must be given together",
+        ),
+        (
+            {
+                "start_time": "2030-01-01T11:00:00+07:00",
+                "end_time": "2030-01-01T10:00:00+07:00",
+            },
+            None,
+            "end_time must be after start_time",
+        ),
+        (
+            {
+                "start_time": "2030-01-01T10:00:00+07:00",
+                "end_time": "2030-01-01T10:00:00+07:00",
+            },
+            None,
+            "end_time must be after start_time",
+        ),
     ],
 )
 def test_parse_window_examples(args, expected, error):

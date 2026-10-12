@@ -191,3 +191,12 @@ def cancel_booking(booking_id):
     if row is None:
         return jsonify(error="booking not found"), 404
     return jsonify(purchase.booking.booking_to_json(row))
+
+
+@purchase_bp.get("/bookings/<int:booking_id>/unlockable")
+def check_unlockable(booking_id):
+    with current_app.db.cursor() as cur:
+        payload, status = purchase.booking.check_unlockable(cur, booking_id)
+    if status == 200:
+        payload = purchase.booking.booking_to_json(payload)
+    return jsonify(payload), status

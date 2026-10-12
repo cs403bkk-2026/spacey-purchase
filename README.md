@@ -10,6 +10,7 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.12 is pinned in `.python-ver
 uv sync
 uv run flask --app app run --port 8002
 curl localhost:8002/health        # {"revision":"local","status":"ok"}
+docker compose up -d --wait db
 uv run pytest
 ```
 

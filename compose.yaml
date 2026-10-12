@@ -1,0 +1,12 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: purchase
+      POSTGRES_PASSWORD: purchase
+      POSTGRES_DB: purchase
+    ports: ["5435:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "purchase"]
+      interval: 2s
+      retries: 15

@@ -100,6 +100,7 @@ uv sync                          # install everything, including dev tools
 uv run ruff check .              # lint
 uv run ruff format --check .     # formatting (drop --check to fix it)
 uv lock --check                  # uv.lock matches pyproject.toml
+docker compose up -d --wait db   # Postgres for the tests, on port 5435
 uv run pytest                    # tests
 ```
 

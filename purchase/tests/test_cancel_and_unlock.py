@@ -156,3 +156,106 @@ def test_delete_space_with_an_uncancelled_booking_is_409(paid):
     assert response.get_json() == {"error": "space has bookings, cancel them first"}
     assert stored_rows(client) == rows
     assert client.get("/spaces/2").status_code == 200
+
+
+UNLOCK_KEYS = ("id", "space_id", "start_time", "end_time")
+REFUSALS = {
+    402: {"error": "booking is not paid"},
+    404: {"error": "booking not found"},
+}
+
+
+def unknown(client):
+    return 999
+
+
+def pending(client):
+    return book(client)["id"]
+
+
+def paid(client):
+    booking_id = book(client)["id"]
+    pay(client, booking_id)
+    return booking_id
+
+
+def cancelled_after_paid(client):
+    booking_id = paid(client)
+    cancel(client, booking_id)
+    return booking_id
+
+
+def completed_at_zero(client):
+    """Like a copied booking a subscription covered: paid at 0, no card."""
+    with client.application.db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO bookings "
+            "(space_id, member, start_time, end_time, amount_cents, status) "
+            "VALUES (1, 'annabel', now() + interval '1 hour', "
+            "now() + interval '2 hours', 0, 'completed') RETURNING id"
+        )
+        return cur.fetchone()["id"]
+
+
+def unlock_facts(client, booking_id):
+    booking = client.get(f"/bookings/{booking_id}").get_json()
+    return {key: booking[key] for key in UNLOCK_KEYS}
+
+
+@pytest.mark.parametrize(
+    ("make_booking", "status"),
+    [
+        (unknown, 404),
+        (pending, 402),
+        (cancelled_after_paid, 404),
+        (paid, 200),
+        (completed_at_zero, 200),
+    ],
+    ids=["unknown", "pending", "cancelled_after_paid", "paid", "completed_at_zero"],
+)
+def test_check_unlockable_answers(make_booking, status):
+    client = make_client()
+    booking_id = make_booking(client)
+    expected = unlock_facts(client, booking_id) if status == 200 else REFUSALS[status]
+
+    response = client.get(f"/bookings/{booking_id}/unlockable")
+
+    assert response.status_code == status
+    assert response.get_json() == expected
+
+
+@pytest.mark.parametrize(
+    "headers", [{}, {"Authorization": "Bearer wrong"}], ids=["missing", "wrong"]
+)
+def test_unlockable_needs_the_token(headers):
+    client = make_client()
+    booking_id = paid(client)
+    without_token = client.application.test_client()
+
+    response = without_token.get(f"/bookings/{booking_id}/unlockable", headers=headers)
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "invalid service token"}
+
+
+def test_hub_journey_pay_unlock_cancel_retry():
+    client = make_client()
+    body = {"member": "annabel", **slot(1, 2)}
+
+    booked = client.post("/spaces/1/bookings", json=body)
+    assert booked.status_code == 201
+    booking_id = booked.get_json()["id"]
+    assert pay(client, booking_id)["paid"] is True
+
+    facts = unlock_facts(client, booking_id)
+    unlock = client.get(f"/bookings/{booking_id}/unlockable")
+    assert unlock.status_code == 200
+    assert unlock.get_json() == facts
+
+    cancelled = cancel(client, booking_id)
+    assert cancelled.status_code == 200
+    assert cancelled.get_json()["paid"] is True
+    assert cancel(client, booking_id).status_code == 404
+    assert client.get(f"/bookings/{booking_id}/unlockable").status_code == 404
+
+    assert client.post("/spaces/1/bookings", json=body).status_code == 201

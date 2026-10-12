@@ -105,6 +105,8 @@ docker compose up -d --wait db   # Postgres for the tests, on port 5435
 uv run pytest                    # tests
 ```
 
+The test database keeps the migrations it has run. After you change a migration that is not merged yet, reset it: `docker compose down -v && docker compose up -d --wait db`.
+
 Run the service and check `/health`:
 
 ```bash

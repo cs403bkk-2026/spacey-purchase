@@ -1,7 +1,7 @@
 # Optional: the same checks as CI's lint job, before each commit.
 # Install once with `uvx pre-commit install`.
 # Verbatim copies of spacey files stay byte-identical until they are deleted.
-exclude: ^(spacey_app\.py|tests/spacey_test_app\.py|openapi\.yaml)$
+exclude: ^(spacey_app\.py|tests/spacey_test_app\.py)$
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

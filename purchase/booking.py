@@ -7,7 +7,7 @@ from psycopg.errors import DeadlockDetected, ExclusionViolation
 from purchase.member import normalise_member_name
 
 BOOKING_COLUMNS = (
-    "id, space_id, member, paid, start_time, end_time, "
+    "id, space_id, member, status = 'completed' AS paid, start_time, end_time, "
     "amount_cents, user_id, card_last4, created_at"
 )
 
@@ -79,14 +79,14 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
     try:
         cur.execute(
             "INSERT INTO bookings "
-            "(space_id, member, paid, start_time, end_time, "
+            "(space_id, member, status, start_time, end_time, "
             "amount_cents, user_id) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s) "
             f"RETURNING {BOOKING_COLUMNS}",
             (
                 space_id,
                 member,
-                False,
+                "pending",
                 start_time,
                 end_time,
                 calculate_booking_price_cents(
@@ -135,7 +135,7 @@ def mark_paid(cur, booking_id, card_last4) -> dict | None:
     """Flip the booking to paid, keeping only the card's last 4 digits.
     Returns the updated row."""
     cur.execute(
-        "UPDATE bookings SET paid = TRUE, card_last4 = %s WHERE id = %s "
+        "UPDATE bookings SET status = 'completed', card_last4 = %s WHERE id = %s "
         f"RETURNING {BOOKING_COLUMNS}",
         (card_last4, booking_id),
     )

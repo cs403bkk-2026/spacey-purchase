@@ -39,7 +39,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 - **Comment only a why the code can't carry.** Good reasons are a Python gotcha, a race condition, a security consequence or an ADR. A function's name carries the what. *Hit:* "bool is a subclass of int in Python, so rule out true/false".
 - **Docstrings state the return contract when the name can't.** Say what comes back, for success and failure, as in `Returns (payload, status) - the new space, or an {"error": ...}.`
 - **Delete-test every comment.** If removing it loses no information the code doesn't already carry, it's restating: cut it.
-- **History belongs to git.** Ticket and issue numbers (including `PUR-NNN`), "added for X" and "previously Y" go in PR titles, commit messages and ADRs, not comments. *Hit:* `schema.py` cites `(#171)`, `(#134, the first concrete step of #86)` and `(#119)`. Those are `spacey` issues, but from this repository they link to issues here.
+- **History belongs to git.** Ticket and issue numbers (including `PUR-NNN`), "added for X" and "previously Y" go in PR titles, commit messages and ADRs, not comments. *Hit:* `spacey`'s `purchase/schema.py` cites `(#171)`, `(#134, the first concrete step of #86)` and `(#119)`. Those are `spacey` issues, but from this repository they link to issues here.
 - **No commented-out code and no banner or position-marker comments.**
 
 ## Objects and data structures [ch. 6]
@@ -74,7 +74,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 ## Systems [ch. 11]
 
 - **The app is built by `create_app()`.** Importing a module has no side effects: no connections and no reading config at import time. Config comes from environment variables with a working local default. *Hit:* `/health` reads `APP_REVISION` per request, falling back to `"local"`, so tests can set it with `monkeypatch`.
-- **Schema changes are migrations.** Each change is a new numbered SQL file, applied once and in order. Never edit or renumber a merged file; take the next free number when you rebase. *Hit:* `schema.py` reruns every statement on every start and records nothing, so it cannot drop or replace anything safely.
+- **Schema changes are migrations.** Each change is a new numbered SQL file, applied once and in order. Never edit or renumber a merged file; take the next free number when you rebase. *Hit:* `spacey`'s `purchase/schema.py` reruns every statement on every start and records nothing, so it cannot drop or replace anything safely.
 - **Old data arrives only through the migration script.** The rules that map old values to new ones (a column, a status) are written down next to the script and tested, never patched into application code.
 
 ## Concurrency [ch. 13]

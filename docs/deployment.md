@@ -1,18 +1,21 @@
 # Deploying the Purchase service
 
-Deployment is not yet enabled. In the current revision `GET /health` reports only
-that the process runs and which revision it is; it does not open a database
-connection, so a healthy check says nothing about the database. No migration,
-data copy or traffic switch runs in this workflow (those are PUR-015, PUR-024 and
-PUR-025).
+Deployment is enabled. From PUR-016 on, the service needs `DATABASE_URL` and
+`PURCHASE_TOKEN` to start, applies its migrations at start, and `GET /health`
+runs `SELECT 1`, so a healthy check also covers the database. No data copy or
+traffic switch runs in this workflow (those are PUR-017 and PUR-025).
+
+Do not release a revision that contains PUR-016 until PUR-024 has stored
+`purchase_token` in the runtime variable and added it to the job file: without
+it the service refuses to start, and Nomad reverts the release.
 
 ## Service address and deployed revision
 
 | | |
 |---|---|
-| Address | `https://purchase.cs403bkk26.space` (proposed, not yet live) |
-| Health | `GET /health` → `{"status": "ok", "revision": "<git sha>"}` |
-| Deployed revision | none yet |
+| Address | `https://purchase.cs403bkk26.space` |
+| Health | `GET /health` → `{"status": "ok", "revision": "<git sha>"}`, or `503` with `{"status": "error", "error": "database unreachable"}` from PUR-016 on |
+| Deployed revision | `6b827779debad7efdf840f10683719fb29cda6a6` (PR #39), image `ghcr.io/cs403bkk-2026/spacey-purchase@sha256:194b32f3142ff2d9ba739a548283c67889ac2171e35009b0f6184518a113158d`, [release run 38204845453](https://github.com/cs403bkk-2026/spacey-purchase/actions/runs/38204845453), `/health` reported it at 2026-10-12T04:43:08Z |
 
 Update this table after each verified release: source SHA, image digest,
 workflow run URL and the time `/health` reported that SHA.
@@ -21,10 +24,10 @@ workflow run URL and the time `/health` reported that SHA.
 
 | Name | Value |
 |---|---|
-| `NS` (Nomad namespace) | `purchase` (proposed) |
+| `NS` (Nomad namespace) | `purchase` |
 | `JOB` (Nomad job) | `purchase` |
-| `VAR` (runtime variable) | `nomad/jobs/purchase` (proposed) |
-| `HOST` | `purchase.cs403bkk26.space` (proposed) |
+| `VAR` (runtime variable) | `nomad/jobs/purchase` |
+| `HOST` | `purchase.cs403bkk26.space` |
 
 The job file is [`deploy/purchase.nomad.hcl`](../deploy/purchase.nomad.hcl). Its
 runtime variable lives under the job-owned path so the job's workload identity

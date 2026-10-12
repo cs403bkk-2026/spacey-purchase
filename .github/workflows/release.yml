@@ -13,6 +13,18 @@ jobs:
     permissions:
       contents: read
       packages: write
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: purchase
+          POSTGRES_PASSWORD: purchase
+          POSTGRES_DB: purchase
+        ports: ["5435:5432"]
+        options: >-
+          --health-cmd "pg_isready -U purchase" --health-interval 2s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://purchase:purchase@localhost:5435/purchase
     outputs:
       digest: ${{ steps.image.outputs.digest }}
     steps:
@@ -25,7 +37,8 @@ jobs:
       - name: Build and exercise the release image
         run: |
           docker build --build-arg APP_REVISION="${GITHUB_SHA}" -t purchase-release .
-          docker run -d --name purchase-smoke -p 8000:8000 purchase-release
+          docker run -d --name purchase-smoke --network host \
+            -e DATABASE_URL="${DATABASE_URL}" -e PURCHASE_TOKEN=release-smoke purchase-release
           trap 'docker rm -f purchase-smoke' EXIT
           for attempt in $(seq 1 30); do
             echo "Container health attempt ${attempt}/30"

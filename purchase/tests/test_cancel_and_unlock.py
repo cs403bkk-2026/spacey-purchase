@@ -158,7 +158,6 @@ def test_delete_space_with_an_uncancelled_booking_is_409(paid):
     assert client.get("/spaces/2").status_code == 200
 
 
-UNLOCK_KEYS = ("id", "space_id", "start_time", "end_time")
 REFUSALS = {
     402: {"error": "booking is not paid"},
     404: {"error": "booking not found"},
@@ -197,31 +196,28 @@ def completed_at_zero(client):
         return cur.fetchone()["id"]
 
 
-def unlock_facts(client, booking_id):
-    booking = client.get(f"/bookings/{booking_id}").get_json()
-    return {key: booking[key] for key in UNLOCK_KEYS}
-
-
 @pytest.mark.parametrize(
     ("make_booking", "status"),
     [
         (unknown, 404),
         (pending, 402),
         (cancelled_after_paid, 404),
-        (paid, 200),
-        (completed_at_zero, 200),
+        (paid, 204),
+        (completed_at_zero, 204),
     ],
     ids=["unknown", "pending", "cancelled_after_paid", "paid", "completed_at_zero"],
 )
 def test_check_unlockable_answers(make_booking, status):
     client = make_client()
     booking_id = make_booking(client)
-    expected = unlock_facts(client, booking_id) if status == 200 else REFUSALS[status]
 
     response = client.get(f"/bookings/{booking_id}/unlockable")
 
     assert response.status_code == status
-    assert response.get_json() == expected
+    if status == 204:
+        assert response.data == b""
+    else:
+        assert response.get_json() == REFUSALS[status]
 
 
 @pytest.mark.parametrize(
@@ -247,10 +243,7 @@ def test_hub_journey_pay_unlock_cancel_retry():
     booking_id = booked.get_json()["id"]
     assert pay(client, booking_id)["paid"] is True
 
-    facts = unlock_facts(client, booking_id)
-    unlock = client.get(f"/bookings/{booking_id}/unlockable")
-    assert unlock.status_code == 200
-    assert unlock.get_json() == facts
+    assert client.get(f"/bookings/{booking_id}/unlockable").status_code == 204
 
     cancelled = cancel(client, booking_id)
     assert cancelled.status_code == 200

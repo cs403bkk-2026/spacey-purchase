@@ -573,23 +573,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/BookingId"
       responses:
-        "200":
-          description: The booking is paid (`completed`).
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  space_id: { type: integer }
-                  start_time: { type: string, format: date-time }
-                  end_time: { type: string, format: date-time }
-                required: [id, space_id, start_time, end_time]
-              example:
-                id: 1
-                space_id: 1
-                start_time: "2030-01-01T10:00:00+00:00"
-                end_time: "2030-01-01T11:00:00+00:00"
+        "204":
+          description: The booking is paid (`completed`), so it may be unlocked. No body.
         "402":
           description: The booking is not paid yet.
           content:

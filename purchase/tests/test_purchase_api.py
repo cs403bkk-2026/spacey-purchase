@@ -18,6 +18,8 @@ CONTRACT = {
     "POST /spaces/<int:space_id>/bookings",
     "GET /bookings",
     "GET /bookings/<int:booking_id>",
+    "GET /bookings/<int:booking_id>/payable",
+    "POST /bookings/<int:booking_id>/paid",
     "DELETE /bookings/<int:booking_id>",
     "POST /register",
     "POST /users/authenticate",

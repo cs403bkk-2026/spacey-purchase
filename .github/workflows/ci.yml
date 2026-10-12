@@ -37,9 +37,24 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: purchase/ imports no other service's code
+        run: |
+          ! git grep -nE '^[[:space:]]*(from|import) (payment|shared|access)([.[:space:]]|$)' -- purchase
 
   test:
     runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: purchase
+          POSTGRES_PASSWORD: purchase
+          POSTGRES_DB: purchase
+        ports: ["5435:5432"]
+        options: >-
+          --health-cmd "pg_isready -U purchase" --health-interval 2s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://purchase:purchase@localhost:5435/purchase
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0

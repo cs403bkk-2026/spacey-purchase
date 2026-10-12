@@ -79,9 +79,10 @@ Commits inside your branch are yours to name. Following the same format helps re
 | `test` | `pytest` passes |
 | `secrets` | gitleaks finds no secret anywhere in the history |
 | `docker` | The image builds, and its `/health` reports this commit |
-| 1 approval | From a teammate who did not push the last commit; every conversation resolved |
-| Code owners | The Purchase team approves every change; the architects also approve changes to `openapi.yaml` and `docs/adr/` |
+| 1 approval | From any teammate other than the PR's author and the person who pushed the last commit; every conversation resolved |
 | Up to date | The branch contains the latest `main` (press *Update branch*) |
+
+`.github/CODEOWNERS` asks for reviews automatically: the Purchase team on every PR, and the architects as well on `openapi.yaml` and `docs/adr/`. Their review is welcome, but any teammate's approval meets the rule.
 
 **Merging:** the author merges with **Squash and merge** and keeps the PR title as the commit title. Merge commits and rebase merges are switched off.
 

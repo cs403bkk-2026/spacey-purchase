@@ -1,0 +1,94 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run pytest
+      - name: Build and exercise the release image
+        run: |
+          docker build --build-arg APP_REVISION="${GITHUB_SHA}" -t purchase-release .
+          docker run -d --name purchase-smoke -p 8000:8000 purchase-release
+          trap 'docker rm -f purchase-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            echo "Container health attempt ${attempt}/30"
+            if curl --fail --silent --max-time 5 http://localhost:8000/health | \
+              jq -e --arg revision "${GITHUB_SHA}" '.status == "ok" and .revision == $revision'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs purchase-smoke
+          exit 1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exercised image
+        id: image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_SHA}"
+          docker tag purchase-release "${image}"
+          docker push "${image}"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${image}")"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: purchase-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-nomad@6e88df50dd00f3737f04fddde2bf2bd446e313dd
+        with:
+          version: "1.10.5"
+      - name: Deploy the reviewed main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+          NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+          NOMAD_NAMESPACE: ${{ vars.NOMAD_NAMESPACE }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+          RUNTIME_VARIABLE: ${{ vars.RUNTIME_VARIABLE }}
+          IMAGE: ${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          : "${NOMAD_ADDR:?}" "${NOMAD_TOKEN:?}" "${NOMAD_NAMESPACE:?}" "${APP_HOSTNAME:?}" "${RUNTIME_VARIABLE:?}" "${IMAGE:?}"
+          current_revision="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          test "${current_revision}" = "${GITHUB_SHA}"
+          nomad job run \
+            -var="image=${IMAGE}" -var="revision=${GITHUB_SHA}" \
+            -var="namespace=${NOMAD_NAMESPACE}" -var="hostname=${APP_HOSTNAME}" \
+            -var="runtime_variable=${RUNTIME_VARIABLE}" deploy/purchase.nomad.hcl
+          for attempt in $(seq 1 30); do
+            echo "Public health attempt ${attempt}/30"
+            if curl --fail --silent --show-error --max-time 10 "https://${APP_HOSTNAME}/health" | \
+              jq -e --arg revision "${GITHUB_SHA}" '.status == "ok" and .revision == $revision'; then
+              echo "Verified ${GITHUB_SHA} at https://${APP_HOSTNAME}/health" >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

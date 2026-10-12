@@ -1,20 +1,9 @@
 from datetime import UTC, datetime
 
+from purchase_helpers import BOOKING_KEYS
+
 from purchase.booking import create_booking, get_booking, mark_paid
 from purchase.space import create_space
-
-BOOKING_KEYS = {
-    "id",
-    "space_id",
-    "member",
-    "paid",
-    "start_time",
-    "end_time",
-    "amount_cents",
-    "user_id",
-    "card_last4",
-    "created_at",
-}
 
 
 def at(hour, minute=0):

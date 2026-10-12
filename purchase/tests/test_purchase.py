@@ -1,7 +1,8 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
+from purchase.api import parse_time, parse_window
 from purchase.booking import (
     calculate_booking_price_cents,
     create_booking,
@@ -103,3 +104,72 @@ def test_an_old_covered_booking_reads_paid_at_zero(cur):
     assert covered["paid"] is True
     assert covered["amount_cents"] == 0
     assert covered["card_last4"] is None
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("2030-01-01T10:00:00+07:00", datetime(2030, 1, 1, 3, tzinfo=UTC)),
+        ("2030-01-01T03:00:00Z", datetime(2030, 1, 1, 3, tzinfo=UTC)),
+        ("2030-01-01T10:00:00", None),
+        ("tomorrow", None),
+        ("", None),
+        (None, None),
+        (42, None),
+    ],
+)
+def test_parse_time_examples(value, expected):
+    assert parse_time(value) == expected
+
+
+@pytest.mark.parametrize(
+    "args,expected,error",
+    [
+        ({}, None, None),
+        (
+            {
+                "start_time": "2030-01-01T10:00:00+07:00",
+                "end_time": "2030-01-01T11:00:00+07:00",
+            },
+            (
+                datetime(2030, 1, 1, 10, tzinfo=timezone(timedelta(hours=7))),
+                datetime(2030, 1, 1, 11, tzinfo=timezone(timedelta(hours=7))),
+            ),
+            None,
+        ),
+        ({"start_time": "2030-01-01T10:00:00+07:00"}, None, "must be given together"),
+        ({"end_time": "2030-01-01T11:00:00+07:00"}, None, "must be given together"),
+        (
+            {
+                "start_time": "2030-01-01T10:00:00",
+                "end_time": "2030-01-01T11:00:00+07:00",
+            },
+            None,
+            "must be given together",
+        ),
+        (
+            {
+                "start_time": "2030-01-01T11:00:00+07:00",
+                "end_time": "2030-01-01T10:00:00+07:00",
+            },
+            None,
+            "end_time must be after start_time",
+        ),
+        (
+            {
+                "start_time": "2030-01-01T10:00:00+07:00",
+                "end_time": "2030-01-01T10:00:00+07:00",
+            },
+            None,
+            "end_time must be after start_time",
+        ),
+    ],
+)
+def test_parse_window_examples(args, expected, error):
+    window, message = parse_window(args)
+    if error:
+        assert window is None
+        assert error in message
+    else:
+        assert message is None
+        assert window == expected

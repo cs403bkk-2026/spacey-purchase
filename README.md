@@ -44,7 +44,7 @@ A missing required setting or an unreachable database stops the start with a `Ru
 ## Layout
 
 ```
-app.py              create_app(): the Flask app and /health
+app.py              create_app(): settings, database, service token, /health
 purchase/           the Purchase domain (mirrored by spacey/purchase/)
 tests/              tests of the app
 openapi.yaml        the HTTP contract

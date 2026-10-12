@@ -4,7 +4,7 @@ about: One piece of the plan (a sub-issue of PUR-000), done in one or more PRs
 title: "PUR-NNN: <imperative>"
 ---
 
-**Phase N** · Part of PUR-000 (#3) · Depends on: <!-- #N merged, or "nothing" --> · PRs: <!-- number -->
+**Phase N** Level N · Part of PUR-000 (#3) · Depends on: <!-- #N merged, or "nothing" --> · PRs: <!-- number -->
 
 ## Files
 

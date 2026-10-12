@@ -15,7 +15,7 @@ dev = [
 ]
 
 [tool.ruff]
-# Plain copies of spacey, deleted by PUR-002.
+# Plain copies of spacey, deleted by PUR-016.
 extend-exclude = ["spacey_app.py", "tests/spacey_test_app.py"]
 
 [tool.ruff.lint]

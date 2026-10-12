@@ -159,9 +159,17 @@ def mark_paid(cur, booking_id, card_last4) -> dict | None:
 
 
 def cancel_booking(cur, booking_id) -> dict | None:
-    """Delete a booking (its access code goes with it); None if not found."""
-    cur.execute(
-        f"DELETE FROM bookings WHERE id = %s RETURNING {BOOKING_COLUMNS}",
-        (booking_id,),
-    )
-    return cur.fetchone()
+    """Soft cancel: the row as it was, or None if unknown or cancelled."""
+    with cur.connection.transaction():
+        # FOR UPDATE waits for a payment in flight, so the answer shows it.
+        cur.execute(
+            f"SELECT {BOOKING_COLUMNS} FROM bookings "
+            "WHERE id = %s AND status <> 'cancelled' FOR UPDATE",
+            (booking_id,),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            cur.execute(
+                "UPDATE bookings SET status = 'cancelled' WHERE id = %s", (booking_id,)
+            )
+        return row

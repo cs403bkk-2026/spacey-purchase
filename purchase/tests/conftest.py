@@ -6,13 +6,11 @@ from psycopg.rows import dict_row
 
 from purchase.migrations import run_migrations
 
-LOCAL_DATABASE_URL = "postgresql://purchase:purchase@localhost:5435/purchase"
-
 
 @pytest.fixture(scope="session")
 def database_url():
     """The test database, migrated once per session."""
-    url = os.getenv("DATABASE_URL", LOCAL_DATABASE_URL)
+    url = os.environ["DATABASE_URL"]
     with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
         run_migrations(conn)
     return url

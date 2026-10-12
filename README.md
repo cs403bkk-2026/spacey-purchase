@@ -8,9 +8,10 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.12 is pinned in `.python-ver
 
 ```bash
 uv sync
+docker compose up -d --wait db
+export DATABASE_URL=postgresql://purchase:purchase@localhost:5435/purchase PURCHASE_TOKEN=dev
 uv run flask --app app run --port 8002
 curl localhost:8002/health        # {"revision":"local","status":"ok"}
-docker compose up -d --wait db
 uv run pytest
 ```
 
@@ -18,12 +19,27 @@ With Docker:
 
 ```bash
 docker build --build-arg APP_REVISION=$(git rev-parse HEAD) -t spacey-purchase .
-docker run --rm -p 8002:8000 spacey-purchase
+docker run --rm -p 8002:8000 --add-host=host.docker.internal:host-gateway \
+  -e DATABASE_URL=postgresql://purchase:purchase@host.docker.internal:5435/purchase \
+  -e PURCHASE_TOKEN=dev spacey-purchase
 ```
+
+## Settings
+
+| Variable | |
+|---|---|
+| `DATABASE_URL` | Required. The Purchase database. |
+| `PURCHASE_TOKEN` | Required. The service token the hub sends as `Authorization: Bearer <token>`. |
+| `APP_REVISION` | Optional. The revision `/health` reports; `local` when unset. |
+| `PURCHASE_TEST_RESET` | Tests and local runs only, never in production. `1` adds `POST /test/reset`, which empties the tables. |
+| `SEED_STARTER_SPACE` | Tests and local runs only, never in production. `true` adds the space "Founders Desk" to an empty database. |
+
+A missing required setting or an unreachable database stops the start with a `RuntimeError`.
 
 ## Endpoints
 
-- `GET /health`: `200` with `{"status": "ok", "revision": "<APP_REVISION or \"local\">"}`. No authentication.
+- `GET /health`: `200` with `{"status": "ok", "revision": "<APP_REVISION or \"local\">"}`, or `503` with `{"status": "error", "error": "database unreachable"}`. No authentication.
+- Any other request without `Authorization: Bearer <PURCHASE_TOKEN>` answers `403` with `{"error": "invalid service token"}`.
 
 ## Layout
 

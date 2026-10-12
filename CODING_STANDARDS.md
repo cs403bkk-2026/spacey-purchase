@@ -58,7 +58,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 ## Boundaries [ch. 8]
 
-- **Routes have no business rules and no SQL.** A route parses the request, calls one domain function and shapes the response. *Hit:* the module docstring of `purchase/api.py` sets this rule.
+- **Routes have no business rules and no SQL.** A route parses the request, calls one domain function and shapes the response. *Hit:* the module docstring of `purchase/api.py` sets this rule. Exception: `/health` and `/test/reset` in `app.py` run their one statement themselves.
 - **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected.
 - **Purchase calls no other service.** `spacey` is the hub: it calls each service in turn and passes on the facts the next one needs. Our functions take everything they need as arguments and never reach Payment or Access themselves. *Hit:* `mark_booking_paid` imports `payment.services.authorize_card`; that call leaves Purchase when Payment owns `/pay`.
 - **`openapi.yaml` is the contract.** A change to a path, method, status or body updates `openapi.yaml` in the same PR. A breaking change follows [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages-and-pr-titles).
@@ -73,7 +73,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 
 ## Systems [ch. 11]
 
-- **The app is built by `create_app()`.** Importing a module has no side effects: no connections and no reading config at import time. Config comes from environment variables with a working local default. *Hit:* `/health` reads `APP_REVISION` per request, falling back to `"local"`, so tests can set it with `monkeypatch`.
+- **The app is built by `create_app()`.** Importing a module has no side effects: no connections and no reading config at import time. Config comes from environment variables. Optional settings have a working local default. Required ones (`DATABASE_URL`, `PURCHASE_TOKEN`) have none: a missing one stops the start with a `RuntimeError` naming it. *Hit:* `/health` reads `APP_REVISION` per request, falling back to `"local"`, so tests can set it with `monkeypatch`.
 - **Schema changes are migrations.** Each change is a new numbered SQL file, applied once and in order. Never edit or renumber a merged file; take the next free number when you rebase. *Hit:* `spacey`'s `purchase/schema.py` reruns every statement on every start and records nothing, so it cannot drop or replace anything safely.
 - **Old data arrives only through the migration script.** The rules that map old values to new ones (a column, a status) are written down next to the script and tested, never patched into application code.
 

@@ -12,6 +12,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app.py gunicorn.conf.py ./
+COPY purchase/ purchase/
 
 RUN useradd --system --no-create-home app
 USER app

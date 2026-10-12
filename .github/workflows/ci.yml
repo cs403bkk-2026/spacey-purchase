@@ -72,12 +72,24 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: purchase
+          POSTGRES_PASSWORD: purchase
+          POSTGRES_DB: purchase
+        ports: ["5435:5432"]
+        options: >-
+          --health-cmd "pg_isready -U purchase" --health-interval 2s --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -t purchase-ci .
       - name: /health reports this revision, as the release smoke test checks
         run: |
-          docker run -d --name smoke -p 8000:8000 purchase-ci
+          docker run -d --name smoke --network host \
+            -e DATABASE_URL=postgresql://purchase:purchase@localhost:5435/purchase \
+            -e PURCHASE_TOKEN=ci-token purchase-ci
           for _ in $(seq 1 30); do
             if curl -fsS --max-time 5 localhost:8000/health |
               jq -e --arg r "$GITHUB_SHA" '.status == "ok" and .revision == $r'; then

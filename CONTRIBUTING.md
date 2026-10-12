@@ -110,6 +110,7 @@ The test database keeps the migrations it has run. After you change a migration 
 Run the service and check `/health`:
 
 ```bash
+export DATABASE_URL=postgresql://purchase:purchase@localhost:5435/purchase PURCHASE_TOKEN=dev
 uv run flask --app app run --port 8002
 curl localhost:8002/health       # {"revision":"local","status":"ok"}
 ```

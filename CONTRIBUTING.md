@@ -26,10 +26,10 @@ We use **gitflow with `main` as the development branch**:
 
 | Prefix | For | Example |
 |---|---|---|
-| `feature/` | new behaviour | `feature/pur-003-run-once-migrations` |
-| `fix/` | a bug fix | `fix/pur-004-pay-once` |
-| `refactor/` | a change with no behaviour change | `refactor/pur-012-metrics-module` |
-| `test/` | tests only | `test/pur-004-payment-outcomes` |
+| `feature/` | new behaviour | `feature/pur-015-run-once-migrations` |
+| `fix/` | a bug fix | `fix/pur-020-pay-once` |
+| `refactor/` | a change with no behaviour change | `refactor/pur-013-metrics-module` |
+| `test/` | tests only | `test/pur-020-payment-outcomes` |
 | `docs/` | documentation only | `docs/contributing` |
 | `ci/`, `build/`, `chore/`, `perf/`, `revert/` | CI, image and dependencies, upkeep, speed, undoing a merge | `chore/update-flask` |
 
@@ -53,13 +53,13 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
 Examples:
 
 ```
-feat(purchase): create the Purchase database through run-once migrations (PUR-003)
-fix(purchase): record a payment only once (PUR-004)
-refactor(purchase): move compute_metrics into purchase/metrics.py (PUR-012)
+feat(purchase): create the Purchase database through run-once migrations (PUR-015)
+fix(purchase): record a payment only once (PUR-020)
+refactor(purchase): move compute_metrics into purchase/metrics.py (PUR-013)
 ci: run the tests against Postgres
 ```
 
-**Breaking change** to our public API (a path, method, status or body that a caller relies on): add `!` before the colon and a `BREAKING CHANGE:` line in the PR body. For example, `feat(purchase)!: answer 410 on subscribe (PUR-001)`.
+**Breaking change** to our public API (a path, method, status or body that a caller relies on): add `!` before the colon and a `BREAKING CHANGE:` line in the PR body. For example, `feat(purchase)!: answer 410 on subscribe (PUR-014)`.
 
 Commits inside your branch are yours to name. Following the same format helps reviewers but is not checked.
 
@@ -101,6 +101,7 @@ uv sync                          # install everything, including dev tools
 uv run ruff check .              # lint
 uv run ruff format --check .     # formatting (drop --check to fix it)
 uv lock --check                  # uv.lock matches pyproject.toml
+docker compose up -d --wait db   # Postgres for the tests, on port 5435
 uv run pytest                    # tests
 ```
 
@@ -147,7 +148,7 @@ This repository is **public**.
 
 ## Issues
 
-- Ticket titles are `PUR-NNN: <imperative>` (for example `PUR-003: Create the Purchase database through run-once migrations`). Use the *Ticket* template.
+- Ticket titles are `PUR-NNN: <imperative>` (for example `PUR-015: Create the Purchase database through run-once migrations`). Use the *Ticket* template.
 - Each ticket has a header line (phase, parent, depends on, PRs), a **Files** table, Why, What to do per PR, Tests, Done when and Not in scope.
 - Label a ticket `blocked` while it waits on another ticket.
 

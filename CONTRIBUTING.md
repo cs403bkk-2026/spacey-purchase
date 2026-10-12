@@ -152,7 +152,7 @@ This repository is **public**.
 
 ## Releases
 
-`main` is what gets released; there are no release branches. Deployment is set up in #15. Once it lands, its documentation describes how a release is run and rolled back.
+`main` is what gets released; there are no release branches. [docs/deployment.md](docs/deployment.md) describes how a release is run, checked and rolled back.
 
 ## Repository settings (admins)
 

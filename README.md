@@ -32,6 +32,8 @@ purchase/           the Purchase domain (mirrored by spacey/purchase/)
 tests/              tests of the app
 openapi.yaml        the HTTP contract
 docs/adr/           architecture decisions
+docs/deployment.md  how a release is run, checked and rolled back
+deploy/             the Nomad job file
 spacey_app.py       verbatim copies of spacey files, kept as a reference
 tests/spacey_test_app.py   until their content has moved here
 ```
@@ -41,3 +43,4 @@ tests/spacey_test_app.py   until their content has moved here
 - [CONTRIBUTING.md](CONTRIBUTING.md): branches, commit and PR titles, reviews, local checks.
 - [CODING_STANDARDS.md](CODING_STANDARDS.md): the rules reviewers apply.
 - [docs/adr/](docs/adr/): why the service is shaped this way.
+- [docs/deployment.md](docs/deployment.md): service address, deployed revision, release and the SRE check.

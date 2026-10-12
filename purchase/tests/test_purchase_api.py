@@ -2,7 +2,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from purchase_helpers import login, make_client, pay, register, slot
+from purchase_helpers import BOOKING_KEYS, login, make_client, pay, register, slot
 
 from app import create_app
 
@@ -24,7 +24,8 @@ CONTRACT = {
     "GET /users/<int:user_id>/bookings",
 }
 
-# One request per route in CONTRACT, against space 1 or 2, booking 1, user 1.
+# One request per PUR-016 route, against space 1 or 2, booking 1, user 1.
+# Routes added later join CONTRACT only and test their own token.
 ROUTES = [
     ("GET", "/spaces", None),
     ("POST", "/spaces", {"name": "Meeting Room A", "capacity": 6}),
@@ -45,19 +46,6 @@ ROUTES = [
     ),
     ("GET", "/users/1/bookings", None),
 ]
-
-BOOKING_KEYS = {
-    "id",
-    "space_id",
-    "member",
-    "paid",
-    "start_time",
-    "end_time",
-    "amount_cents",
-    "user_id",
-    "card_last4",
-    "created_at",
-}
 
 
 def test_three_hours_cost_three_times_one_hour():
@@ -1087,7 +1075,7 @@ def test_route_table_is_the_contract():
     }
 
     assert routes == CONTRACT | {"GET /health", "POST /test/reset"}
-    assert requested == CONTRACT
+    assert requested <= CONTRACT
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,20 @@ from app import create_app
 
 NOW = datetime.now(UTC)
 
+# The keys of a booking in every answer: `paid`, never the stored `status`.
+BOOKING_KEYS = {
+    "id",
+    "space_id",
+    "member",
+    "paid",
+    "start_time",
+    "end_time",
+    "amount_cents",
+    "user_id",
+    "card_last4",
+    "created_at",
+}
+
 
 def make_client(reset=True):
     client = create_app().test_client()

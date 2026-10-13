@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 import purchase.booking
 import purchase.member
+import purchase.metrics
 import purchase.space
 
 purchase_bp = Blueprint("purchase", __name__)
@@ -192,6 +193,13 @@ def cancel_booking(booking_id):
     if row is None:
         return jsonify(error="booking not found"), 404
     return jsonify(purchase.booking.booking_to_json(row))
+
+
+@purchase_bp.get("/metrics")
+def metrics():
+    with current_app.db.cursor() as cur:
+        data = purchase.metrics.compute_metrics(cur)
+    return jsonify(data)
 
 
 @purchase_bp.get("/bookings/<int:booking_id>/payable")

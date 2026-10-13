@@ -64,8 +64,11 @@ In the protected `production` environment set variables `NOMAD_NAMESPACE`,
 
 ## Release
 
-`main` is what gets released. After review and merge, the release owner runs the
-`release` workflow from `main` (Actions → release → Run workflow). It runs the
+`main` is what gets released. Every push to `main` starts the `release` workflow.
+The release owner can also retry it from `main` (Actions → release → Run workflow).
+With `DEPLOY_ENABLED=true`, the workflow first requires configured reviewers on
+the `production` environment; missing protection fails the run before publishing.
+The deploy job waits for that environment's approval. The workflow runs the
 tests, builds the image with the commit as its revision, checks that the image's
 `/health` reports that commit, and publishes that same image. Deployment uses its
 registry digest, waits for Nomad's rollout, then requires the public `/health` to

@@ -195,6 +195,16 @@ def cancel_booking(booking_id):
     return jsonify(purchase.booking.booking_to_json(row))
 
 
+@purchase_bp.get("/bookings/<int:booking_id>/unlockable")
+def check_unlockable(booking_id):
+    with current_app.db.cursor() as cur:
+        refusal = purchase.booking.check_unlockable(cur, booking_id)
+    if refusal is None:
+        return "", 204
+    payload, status = refusal
+    return jsonify(payload), status
+
+
 @purchase_bp.get("/metrics")
 def metrics():
     with current_app.db.cursor() as cur:

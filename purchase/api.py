@@ -1,12 +1,14 @@
 """HTTP routes of the Purchase service. Each route parses the request, calls
 one domain function and shapes the response - no business rules or SQL here."""
 
+import re
 from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request
 
 import purchase.booking
 import purchase.member
+import purchase.metrics
 import purchase.space
 
 purchase_bp = Blueprint("purchase", __name__)
@@ -201,3 +203,33 @@ def check_unlockable(booking_id):
         return "", 204
     payload, status = refusal
     return jsonify(payload), status
+@purchase_bp.get("/metrics")
+def metrics():
+    with current_app.db.cursor() as cur:
+        data = purchase.metrics.compute_metrics(cur)
+    return jsonify(data)
+
+
+@purchase_bp.get("/bookings/<int:booking_id>/payable")
+def check_payable(booking_id):
+    with current_app.db.cursor() as cur:
+        payload, status = purchase.booking.check_payable(cur, booking_id)
+    return jsonify(payload), status
+
+
+@purchase_bp.post("/bookings/<int:booking_id>/paid")
+def booking_paid(booking_id):
+    body = request.get_json(silent=True)
+    # Only the last 4 digits may ever reach Purchase.
+    if not (
+        isinstance(body, dict)
+        and body.keys() == {"card_last4"}
+        and isinstance(body["card_last4"], str)
+        and re.fullmatch("[0-9]{4}", body["card_last4"])
+    ):
+        return jsonify(error="send only card_last4, as 4 digits"), 400
+    with current_app.db.cursor() as cur:
+        row = purchase.booking.mark_paid(cur, booking_id, body["card_last4"])
+    if row is None:
+        return jsonify(error="booking not found"), 404
+    return jsonify(purchase.booking.booking_to_json(row)), 200

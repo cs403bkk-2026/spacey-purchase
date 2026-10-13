@@ -701,8 +701,7 @@ paths:
                     description: >
                       Booked hours over the next 7 days as a share of
                       available hours (spaces x 7 x 24), 0 if there are no
-                      spaces. Counts every booking that is not cancelled,
-                      regardless of paid status - this measures usage, not revenue.
+                      spaces. Counts every booking that holds its slot (pending or completed), paid or not - this measures usage, not revenue.
                     example: 0.15
                   repeat_member_rate:
                     type: number

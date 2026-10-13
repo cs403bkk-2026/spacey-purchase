@@ -10,6 +10,7 @@ from app import create_app
 CONTRACT = {
     "GET /spaces",
     "POST /spaces",
+    "GET /metrics",
     "GET /spaces/booked-ids",
     "GET /spaces/<int:space_id>",
     "PATCH /spaces/<int:space_id>",
@@ -18,6 +19,8 @@ CONTRACT = {
     "POST /spaces/<int:space_id>/bookings",
     "GET /bookings",
     "GET /bookings/<int:booking_id>",
+    "GET /bookings/<int:booking_id>/payable",
+    "POST /bookings/<int:booking_id>/paid",
     "DELETE /bookings/<int:booking_id>",
     "GET /bookings/<int:booking_id>/unlockable",
     "POST /register",

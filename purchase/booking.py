@@ -156,17 +156,40 @@ def check_unlockable(cur, booking_id) -> tuple[dict, int] | None:
     if not booking["paid"]:
         return {"error": "booking is not paid"}, 402
     return None
+def check_payable(cur, booking_id):
+    """May Payment collect, and how much? Collect only when status is
+    "pending"; "completed" means already paid.
+    Returns ({"id", "amount_cents", "status"}, 200) or ({"error": ...}, 404)."""
+    cur.execute(
+        "SELECT id, amount_cents, status FROM bookings "
+        "WHERE id = %s AND status <> 'cancelled'",
+        (booking_id,),
+    )
+    facts = cur.fetchone()
+    if facts is None:
+        return {"error": "booking not found"}, 404
+    return facts, 200
 
 
 def mark_paid(cur, booking_id, card_last4) -> dict | None:
-    """Flip the booking to paid, keeping only the card's last 4 digits.
-    Returns the updated row."""
+    """Record a successful payment. Safe to repeat: a completed booking comes
+    back as stored, first card kept. None when missing or cancelled."""
+    # The status guard is the race fix: of two concurrent callers, the second
+    # waits for the row lock, then matches nothing.
     cur.execute(
-        "UPDATE bookings SET status = 'completed', card_last4 = %s WHERE id = %s "
-        f"RETURNING {BOOKING_COLUMNS}",
+        "UPDATE bookings SET status = 'completed', card_last4 = %s "
+        f"WHERE id = %s AND status = 'pending' RETURNING {BOOKING_COLUMNS}",
         (card_last4, booking_id),
     )
-    return cur.fetchone()
+    row = cur.fetchone()
+    if row is None:
+        cur.execute(
+            f"SELECT {BOOKING_COLUMNS} FROM bookings "
+            "WHERE id = %s AND status = 'completed'",
+            (booking_id,),
+        )
+        row = cur.fetchone()
+    return row
 
 
 def cancel_booking(cur, booking_id) -> dict | None:

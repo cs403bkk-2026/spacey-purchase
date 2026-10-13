@@ -83,6 +83,7 @@ def test_cancel_waits_for_a_payment_in_flight():
     booking = book(client)
     answers = []
     with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as payer:
+        payer.execute("SELECT 1")
         purchase.booking.mark_paid(payer.cursor(), booking["id"], "4242")
         thread = threading.Thread(
             target=lambda: answers.append(cancel(client, booking["id"]))

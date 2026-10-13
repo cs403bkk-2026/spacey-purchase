@@ -11,6 +11,14 @@ BOOKING_COLUMNS = (
     "amount_cents, user_id, card_last4, created_at"
 )
 
+# SP-R07: an unpaid booking holds its slot for 15 minutes from creation.
+# The constraint can't read now(), so code that decides a slot marks
+# overdue holds first.
+EXPIRE_HOLDS = (
+    "UPDATE bookings SET status = 'expired' "
+    "WHERE status = 'pending' AND created_at <= now() - interval '15 minutes'"
+)
+
 
 def booking_to_json(row: dict) -> dict:
     """A booking row ready for jsonify: its times as UTC ISO 8601 strings."""
@@ -75,6 +83,7 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
 
     # Overlap = starts before the other ends AND ends after the
     # other starts. Back-to-back bookings (10-11, 11-12) are allowed.
+    cur.execute(EXPIRE_HOLDS)
     cur.execute(
         "SELECT id FROM bookings "
         "WHERE space_id = %s AND start_time < %s AND end_time > %s "
@@ -120,9 +129,11 @@ def list_bookings(cur) -> list:
 
 
 def list_space_bookings(cur, space_id) -> list:
+    cur.execute(EXPIRE_HOLDS)
     cur.execute(
         f"SELECT {BOOKING_COLUMNS} FROM bookings "
-        "WHERE space_id = %s AND status <> 'cancelled' ORDER BY start_time",
+        "WHERE space_id = %s AND status IN ('pending', 'completed') "
+        "ORDER BY start_time",
         (space_id,),
     )
     return cur.fetchall()
@@ -161,7 +172,9 @@ def check_unlockable(cur, booking_id) -> tuple[dict, int] | None:
 def check_payable(cur, booking_id):
     """May Payment collect, and how much? Collect only when status is
     "pending"; "completed" means already paid.
-    Returns ({"id", "amount_cents", "status"}, 200) or ({"error": ...}, 404)."""
+    Returns ({"id", "amount_cents", "status"}, 200), or
+    ({"error": ...}, 404), or 409 when the hold has expired."""
+    cur.execute(EXPIRE_HOLDS)
     cur.execute(
         "SELECT id, amount_cents, status FROM bookings "
         "WHERE id = %s AND status <> 'cancelled'",
@@ -170,28 +183,31 @@ def check_payable(cur, booking_id):
     facts = cur.fetchone()
     if facts is None:
         return {"error": "booking not found"}, 404
+    if facts["status"] == "expired":
+        return {"error": "booking hold has expired"}, 409
     return facts, 200
 
 
 def mark_paid(cur, booking_id, card_last4) -> dict | None:
-    """Record a successful payment. Safe to repeat: a completed booking comes
-    back as stored, first card kept. None when missing or cancelled."""
+    """Returns the stored row: paid = confirmed (also a repeat or a late
+    success on a free slot); unpaid = refused. None if missing or cancelled."""
     # The status guard is the race fix: of two concurrent callers, the second
     # waits for the row lock, then matches nothing.
+    try:
+        with cur.connection.transaction():  # a refusal must not abort the request
+            cur.execute(
+                "UPDATE bookings SET status = 'completed', card_last4 = %s "
+                "WHERE id = %s AND status IN ('pending', 'expired')",
+                (card_last4, booking_id),
+            )
+    except (DeadlockDetected, ExclusionViolation):
+        pass  # expired and re-booked: the constraint keeps the newer booking
     cur.execute(
-        "UPDATE bookings SET status = 'completed', card_last4 = %s "
-        f"WHERE id = %s AND status = 'pending' RETURNING {BOOKING_COLUMNS}",
-        (card_last4, booking_id),
+        f"SELECT {BOOKING_COLUMNS} FROM bookings "
+        "WHERE id = %s AND status <> 'cancelled'",
+        (booking_id,),
     )
-    row = cur.fetchone()
-    if row is None:
-        cur.execute(
-            f"SELECT {BOOKING_COLUMNS} FROM bookings "
-            "WHERE id = %s AND status = 'completed'",
-            (booking_id,),
-        )
-        row = cur.fetchone()
-    return row
+    return cur.fetchone()
 
 
 def cancel_booking(cur, booking_id) -> dict | None:

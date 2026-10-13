@@ -1,6 +1,8 @@
 name: release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -11,6 +13,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: write
     services:
@@ -28,6 +31,14 @@ jobs:
     outputs:
       digest: ${{ steps.image.outputs.digest }}
     steps:
+      - name: Require production release approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production" |
+            jq -e 'any(.protection_rules[];
+              .type == "required_reviewers" and (.reviewers | length > 0))' ||
+            { echo "::error::Configure required reviewers for the production environment before releasing."; exit 1; }
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:

@@ -26,7 +26,7 @@ A booking is `pending`, `completed`, `expired` or `cancelled`. Public JSON keeps
 
 ## Hold
 
-The 15-minute hold ([SP-R07](https://github.com/cs403bkk-2026/spacey-business-rules/blob/adc27a3/RULES.md?plain=1#L106-L110)) applies from the switch on. An unpaid booking is `expired` 15 minutes after `created_at`, and its slot is free. The hold is checked before the card is charged ([spacey ADR 0003](https://github.com/cs403bkk-2026/spacey/blob/88ec849/docs/adr/0003-booking-after-failed-payment.md?plain=1#L61-L77)): with `PURCHASE_URL` set, `mark_booking_paid` calls `check_payable` first, and an expired booking answers `409 {"error": "booking hold has expired"}` with no charge. A payment that succeeds later is confirmed only if the slot is still free; otherwise `POST /bookings/{id}/paid` answers 409 and the booking stays unpaid.
+The 15-minute hold ([SP-R07](https://github.com/cs403bkk-2026/spacey-docs/blob/adc27a3/RULES.md?plain=1#L106-L110)) applies from the switch on. An unpaid booking is `expired` 15 minutes after `created_at`, and its slot is free. The hold is checked before the card is charged ([spacey ADR 0003](https://github.com/cs403bkk-2026/spacey/blob/88ec849/docs/adr/0003-booking-after-failed-payment.md?plain=1#L61-L77)): with `PURCHASE_URL` set, `mark_booking_paid` calls `check_payable` first, and an expired booking answers `409 {"error": "booking hold has expired"}` with no charge. A payment that succeeds later is confirmed only if the slot is still free; otherwise `POST /bookings/{id}/paid` answers 409 and the booking stays unpaid.
 
 ## Mirror
 

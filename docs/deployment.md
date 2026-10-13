@@ -37,10 +37,12 @@ can read it without broader variable permissions.
 
 | Item | Value |
 |---|---|
-| `database_url` | The Purchase database and its runtime login, never spacey's. Rendered into `DATABASE_URL`. |
+| `database_url` | The Purchase database and its runtime login, never spacey's. The platform owner must create the `btree_gist` extension in this database before deployment. Rendered into `DATABASE_URL`. |
+| `purchase_token` | A 64-character hexadecimal token, generated with Python's `secrets.token_hex(32)`. Every request except `GET /health` must send `Authorization: Bearer <purchase_token>`. PUR-025 will put the matching value in Spacey's runtime variable. Never paste it in an issue, PR or chat. |
 
-The platform owner stores it. It must never be passed as a job argument,
-committed, or copied into GitHub. A missing item fails the release instead of
+The platform owner stores both items. Neither may be passed as a job argument,
+committed, or copied into GitHub. The job renders both with
+`error_on_missing_key = true`, so a missing item fails the release instead of
 starting the service without it.
 
 ## Platform setup
@@ -104,3 +106,89 @@ curl --fail --silent --show-error https://purchase.cs403bkk26.space/health
 The revision in the response must match the deployed revision above. Record the
 actual result or blocker in issue #15; platform verification alone does not
 establish the SRE's access.
+
+## Checks after a release (no traffic yet)
+
+These checks require the release owner's production access and the SRE's
+read-only Spacey database login. Do not create rows in the Purchase database.
+The commands below are operational checks; run them only with the authorized
+production credentials. Locally, `python scripts/copy_from_spacey.py --help`
+only displays usage and does not connect to either database.
+
+1. Confirm the allocation is running the intended release with
+   `nomad job status -namespace="$NS" "$JOB"`. Compare its deployed revision
+   with the reviewed `main` SHA and the source revision from the `/health`
+   response below.
+2. Check the public health response and its revision:
+
+   ```bash
+   curl --fail --silent --show-error "https://$HOST/health" |
+     jq -e --arg revision "$REVISION" \
+       '.status == "ok" and .revision == $revision'
+   ```
+
+3. Confirm a protected route rejects both an absent and incorrect token. Each
+   command must print `403`:
+
+   ```bash
+   curl --silent --output /dev/null --write-out '%{http_code}\n' \
+     "https://$HOST/spaces"
+   curl --silent --output /dev/null --write-out '%{http_code}\n' \
+     --header 'Authorization: Bearer wrong' "https://$HOST/spaces"
+   ```
+
+4. With the provisioned token available in a protected shell variable named
+   `T`, confirm Purchase metrics report no spaces or bookings. Do not print or
+   record `T`:
+
+   ```bash
+   curl --fail --silent --show-error --header "Authorization: Bearer $T" \
+     "https://$HOST/metrics" | jq -c '{spaces, bookings}'
+   ```
+
+   Expected output: `{"spaces":0,"bookings":0}`.
+5. In the Purchase allocation, inspect every table in the current schema. The
+   `users`, `spaces`, `subscriptions`, and `bookings` counts must be zero;
+   migration rows in `purchase_schema_migrations` are expected:
+
+   ```bash
+   python -c 'import os, psycopg; c = psycopg.connect(os.environ["DATABASE_URL"]); print([(t, c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]) for (t,) in c.execute("SELECT tablename FROM pg_tables WHERE schemaname = current_schema() ORDER BY 1")])'
+   ```
+
+6. Read Spacey's live metrics before the copy dry run and record the UTC time:
+
+   ```bash
+   curl --fail --silent --show-error \
+     https://spacey.cs403bkk26.space/metrics |
+     jq -c '{spaces, bookings, paid_bookings, unpaid_bookings}'
+   ```
+
+   From a Purchase allocation, start a shell, enter the read-only Spacey
+   database URL without echoing it, and run only `--dry-run`. `DATABASE_URL`
+   in the allocation already names Purchase. Never put either URL in command
+   history or a report:
+
+   ```bash
+   nomad alloc exec -namespace="$NS" -i -t -job "$JOB" bash
+   read -rs OLD_URL
+   python scripts/copy_from_spacey.py "$OLD_URL" "$DATABASE_URL" --dry-run
+   unset OLD_URL
+   ```
+
+7. Read Spacey's `/metrics` again using the command above. Compare both live
+   readings with the dry-run counts: old spaces to `spaces`, old bookings to
+   `bookings`, completed to `paid_bookings`, and expired plus pending to
+   `unpaid_bookings`. If live values changed between the readings, investigate
+   or repeat the comparison when they are stable.
+8. Run the same `--dry-run` command a second time and compare its counts,
+   sequence values, and anomalies with the first run. Investigate every
+   unexpected change; a pending booking may become expired after its 15-minute
+   hold, while the combined pending and expired count should remain stable.
+9. Recheck the Purchase table counts from step 5. They must remain zero except
+   for migration records. Record sanitized results, revision, counts, sequence
+   values, anomaly status, and UTC times. Do not include tokens, database URLs,
+   personal information, or other secrets.
+
+The new database must remain empty until PUR-025. Do not use `--apply`,
+`--verify`, `--repair`, any reset or seed setting, or a write-capable Spacey
+database login during these checks.

@@ -13,6 +13,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app.py gunicorn.conf.py ./
 COPY purchase/ purchase/
+COPY scripts/ scripts/
 
 RUN useradd --system --no-create-home app
 USER app

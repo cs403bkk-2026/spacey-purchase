@@ -77,7 +77,8 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
     # other starts. Back-to-back bookings (10-11, 11-12) are allowed.
     cur.execute(
         "SELECT id FROM bookings "
-        "WHERE space_id = %s AND start_time < %s AND end_time > %s",
+        "WHERE space_id = %s AND start_time < %s AND end_time > %s "
+        "AND status IN ('pending', 'completed')",
         (space_id, end_time, start_time),
     )
     if cur.fetchone() is not None:
@@ -111,14 +112,17 @@ def create_booking(cur, space_id, member, start_time, end_time, party_size, user
 
 
 def list_bookings(cur) -> list:
-    cur.execute(f"SELECT {BOOKING_COLUMNS} FROM bookings ORDER BY start_time")
+    cur.execute(
+        f"SELECT {BOOKING_COLUMNS} FROM bookings "
+        "WHERE status <> 'cancelled' ORDER BY start_time"
+    )
     return cur.fetchall()
 
 
 def list_space_bookings(cur, space_id) -> list:
     cur.execute(
         f"SELECT {BOOKING_COLUMNS} FROM bookings "
-        "WHERE space_id = %s ORDER BY start_time",
+        "WHERE space_id = %s AND status <> 'cancelled' ORDER BY start_time",
         (space_id,),
     )
     return cur.fetchall()
@@ -128,14 +132,18 @@ def list_user_bookings(cur, user_id) -> list:
     """Bookings made while logged in as user_id; guest bookings never match."""
     cur.execute(
         f"SELECT {BOOKING_COLUMNS} FROM bookings "
-        "WHERE user_id = %s ORDER BY start_time",
+        "WHERE user_id = %s AND status <> 'cancelled' ORDER BY start_time",
         (user_id,),
     )
     return cur.fetchall()
 
 
 def get_booking(cur, booking_id) -> dict | None:
-    cur.execute(f"SELECT {BOOKING_COLUMNS} FROM bookings WHERE id = %s", (booking_id,))
+    cur.execute(
+        f"SELECT {BOOKING_COLUMNS} FROM bookings "
+        "WHERE id = %s AND status <> 'cancelled'",
+        (booking_id,),
+    )
     return cur.fetchone()
 
 
@@ -151,9 +159,17 @@ def mark_paid(cur, booking_id, card_last4) -> dict | None:
 
 
 def cancel_booking(cur, booking_id) -> dict | None:
-    """Delete a booking (its access code goes with it); None if not found."""
-    cur.execute(
-        f"DELETE FROM bookings WHERE id = %s RETURNING {BOOKING_COLUMNS}",
-        (booking_id,),
-    )
-    return cur.fetchone()
+    """Soft cancel: the row as it was, or None if unknown or cancelled."""
+    with cur.connection.transaction():
+        # FOR UPDATE waits for a payment in flight, so the answer shows it.
+        cur.execute(
+            f"SELECT {BOOKING_COLUMNS} FROM bookings "
+            "WHERE id = %s AND status <> 'cancelled' FOR UPDATE",
+            (booking_id,),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            cur.execute(
+                "UPDATE bookings SET status = 'cancelled' WHERE id = %s", (booking_id,)
+            )
+        return row

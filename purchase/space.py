@@ -1,5 +1,7 @@
 """Space helpers: validating, storing and finding which spaces are booked."""
 
+from psycopg.errors import ForeignKeyViolation
+
 
 def is_valid_capacity(capacity) -> bool:
     # bool is a subclass of int in Python, so rule out true/false
@@ -21,14 +23,16 @@ def booked_space_ids(cur, window) -> set:
     if window is None:
         cur.execute(
             "SELECT DISTINCT space_id FROM bookings "
-            "WHERE start_time <= now() AND end_time > now()"
+            "WHERE start_time <= now() AND end_time > now() "
+            "AND status IN ('pending', 'completed')"
         )
     else:
         start_time, end_time = window
         # Same overlap rule as booking creation: back-to-back is not a clash.
         cur.execute(
             "SELECT DISTINCT space_id FROM bookings "
-            "WHERE start_time < %s AND end_time > %s",
+            "WHERE start_time < %s AND end_time > %s "
+            "AND status IN ('pending', 'completed')",
             (end_time, start_time),
         )
     return {row["space_id"] for row in cur.fetchall()}
@@ -103,14 +107,20 @@ def update_space(cur, space_id, fields):
 
 
 def delete_space(cur, space_id):
-    """Delete a space, refused while it still has bookings.
-    Returns (payload, status) - payload is None once deleted."""
-    if get_space(cur, space_id) is None:
-        return {"error": "space not found"}, 404
-    cur.execute("SELECT 1 FROM bookings WHERE space_id = %s LIMIT 1", (space_id,))
-    if cur.fetchone() is not None:
+    """Delete a space and its cancelled bookings; 409 while another remains."""
+    try:
+        with cur.connection.transaction():
+            # One statement: the foreign key refuses if any other booking remains.
+            cur.execute(
+                "WITH gone AS (DELETE FROM bookings "
+                "WHERE space_id = %s AND status = 'cancelled') "
+                "DELETE FROM spaces WHERE id = %s",
+                (space_id, space_id),
+            )
+    except ForeignKeyViolation:
         return {"error": "space has bookings, cancel them first"}, 409
-    cur.execute("DELETE FROM spaces WHERE id = %s", (space_id,))
+    if cur.rowcount == 0:
+        return {"error": "space not found"}, 404
     return None, 204
 
 

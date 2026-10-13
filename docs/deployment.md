@@ -37,8 +37,8 @@ can read it without broader variable permissions.
 
 | Item | Value |
 |---|---|
-| `database_url` | The Purchase database and its runtime login, never spacey's. The platform owner must create the `btree_gist` extension in this database before deployment. Rendered into `DATABASE_URL`. |
-| `purchase_token` | A 64-character hexadecimal token, generated with Python's `secrets.token_hex(32)`. Every request except `GET /health` must send `Authorization: Bearer <purchase_token>`. PUR-025 will put the matching value in Spacey's runtime variable. Never paste it in an issue, PR or chat. |
+| `database_url` | The Purchase database and login, never spacey's. The platform owner runs `CREATE EXTENSION btree_gist` in it once; without it the first migration fails and nothing is applied. |
+| `purchase_token` | 64 hex characters (`python3 -c 'import secrets; print(secrets.token_hex(32))'`). Every request except `GET /health` must send `Authorization: Bearer <purchase_token>`. Only the hub calls this service: PUR-025 puts the same value in spacey's runtime variable. Payments' callback goes to the hub, not here (PUR-027). Never paste it in an issue, PR or chat. |
 
 The platform owner stores both items. Neither may be passed as a job argument,
 committed, or copied into GitHub. The job renders both with
@@ -57,7 +57,7 @@ checks:
   or separately provisioned registry authentication.
 - The application node can reach the database address in `database_url`, and
   the connection settings match what that server offers.
-- GitHub's `production` environment requires the designated release review.
+- GitHub's `production` environment does not require a separate release approval.
 
 Set `DEPLOY_ENABLED=true` as a repository variable only after setup and review.
 In the protected `production` environment set variables `NOMAD_NAMESPACE`,
@@ -66,8 +66,10 @@ In the protected `production` environment set variables `NOMAD_NAMESPACE`,
 
 ## Release
 
-`main` is what gets released. After review and merge, the release owner runs the
-`release` workflow from `main` (Actions → release → Run workflow). It runs the
+`main` is what gets released. Every push to `main` starts the `release` workflow.
+The release owner can also retry it from `main` (Actions → release → Run workflow).
+With `DEPLOY_ENABLED=true`, deployment proceeds automatically after the build
+checks pass, without a separate production approval. The workflow runs the
 tests, builds the image with the commit as its revision, checks that the image's
 `/health` reports that commit, and publishes that same image. Deployment uses its
 registry digest, waits for Nomad's rollout, then requires the public `/health` to

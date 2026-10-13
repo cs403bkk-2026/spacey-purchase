@@ -138,7 +138,7 @@ The system is five repositories. We own this one; `spacey` is shared; the rest w
 
 - **`spacey/purchase/` mirrors this repo's `purchase/`.** The same module names and function names, so `spacey/purchase/booking.py` calls the code in our `purchase/booking.py`. When a ticket changes our module layout, its PR in `spacey` changes the mirror in the same way; each PR links the other.
 - In `spacey`, change only `purchase/` and the shared lines your ticket names, and follow that repo's own contributing rules.
-- **Other teams are reached through their APIs and our contract**, not through comments on their issues. Our PRs and `openapi.yaml` are the signal. A business-rule change is a PR to `spacey-business-rules`.
+- **Other teams are reached through their APIs and our contract**, not through comments on their issues. Our PRs and `openapi.yaml` are the signal. A business-rule change is a PR to `spacey-docs`.
 - When you mention another team's issue or PR, write it as a code span (`` `spacey-access#20` ``), so GitHub does not post a backlink on their page.
 
 ## Secrets and data

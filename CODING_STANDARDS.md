@@ -59,7 +59,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 ## Boundaries [ch. 8]
 
 - **Routes have no business rules and no SQL.** A route parses the request, calls one domain function and shapes the response. *Hit:* the module docstring of `purchase/api.py` sets this rule. Exception: `/health` and `/test/reset` in `app.py` run their one statement themselves.
-- **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected.
+- **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected. Exception: `POST /bookings/{id}/paid` checks its body in the route and refuses anything but `{"card_last4": "dddd"}`, so card data never reaches a domain function.
 - **Purchase calls no other service.** `spacey` is the hub: it calls each service in turn and passes on the facts the next one needs. Our functions take everything they need as arguments and never reach Payment or Access themselves. *Hit:* `mark_booking_paid` imports `payment.services.authorize_card`; that call leaves Purchase when Payment owns `/pay`.
 - **`openapi.yaml` is the contract.** A change to a path, method, status or body updates `openapi.yaml` in the same PR. A breaking change follows [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages-and-pr-titles).
 

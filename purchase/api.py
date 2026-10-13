@@ -203,6 +203,8 @@ def check_unlockable(booking_id):
         return "", 204
     payload, status = refusal
     return jsonify(payload), status
+
+
 @purchase_bp.get("/metrics")
 def metrics():
     with current_app.db.cursor() as cur:

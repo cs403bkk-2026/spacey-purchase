@@ -156,6 +156,8 @@ def check_unlockable(cur, booking_id) -> tuple[dict, int] | None:
     if not booking["paid"]:
         return {"error": "booking is not paid"}, 402
     return None
+
+
 def check_payable(cur, booking_id):
     """May Payment collect, and how much? Collect only when status is
     "pending"; "completed" means already paid.

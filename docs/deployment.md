@@ -38,6 +38,7 @@ can read it without broader variable permissions.
 | Item | Value |
 |---|---|
 | `database_url` | The Purchase database and its runtime login, never spacey's. Rendered into `DATABASE_URL`. |
+| `purchase_token` | The shared caller token, rendered into `PURCHASE_TOKEN`. Provision before release and keep it consistent with the caller. |
 
 The platform owner stores it. It must never be passed as a job argument,
 committed, or copied into GitHub. A missing item fails the release instead of

@@ -2,6 +2,8 @@
 
 from psycopg.errors import ForeignKeyViolation
 
+from purchase.booking import EXPIRE_HOLDS
+
 
 def is_valid_capacity(capacity) -> bool:
     # bool is a subclass of int in Python, so rule out true/false
@@ -20,6 +22,7 @@ def is_valid_price(price) -> bool:
 
 def booked_space_ids(cur, window) -> set:
     """Spaces booked during the window, or booked right now if no window."""
+    cur.execute(EXPIRE_HOLDS)
     if window is None:
         cur.execute(
             "SELECT DISTINCT space_id FROM bookings "

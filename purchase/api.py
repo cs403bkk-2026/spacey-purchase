@@ -234,4 +234,6 @@ def booking_paid(booking_id):
         row = purchase.booking.mark_paid(cur, booking_id, body["card_last4"])
     if row is None:
         return jsonify(error="booking not found"), 404
+    if not row["paid"]:
+        return jsonify(error="booking hold has expired"), 409
     return jsonify(purchase.booking.booking_to_json(row)), 200

@@ -151,7 +151,8 @@ paths:
         A space is booked when a pending or completed booking overlaps the
         window. A cancelled or expired booking blocks no slot. Pass
         `start_time` and `end_time` together for a specific window, or
-        neither for right now.
+        neither for right now. An unpaid booking counts for 15 minutes from
+        its creation only (SP-R07): after that its hold has expired.
       parameters:
         - $ref: "#/components/parameters/StartTime"
         - $ref: "#/components/parameters/EndTime"
@@ -271,7 +272,9 @@ paths:
     get:
       tags: [bookings]
       summary: List a space's bookings.
-      description: A cancelled booking is not listed.
+      description: >
+        The bookings that hold the space's slots. An unpaid booking older
+        than 15 minutes is not listed: its hold has expired (SP-R07).
       responses:
         "200":
           description: That space's bookings, earliest first.
@@ -299,7 +302,9 @@ paths:
       summary: Book a space.
       description: >
         Always created unpaid; a later `POST /bookings/{bookingId}/paid`
-        marks it paid. A cancelled booking blocks no slot.
+        marks it paid. A cancelled booking blocks no slot. An unpaid
+        booking holds its slot for 15 minutes from creation (SP-R07). After
+        that its hold has expired, and the slot can be booked again.
       requestBody:
         required: true
         content:
@@ -496,7 +501,10 @@ paths:
         Records that the hub charged the card. Only the card's last 4
         digits are ever sent, stored or returned. Marking an already-paid
         booking answers the stored row and keeps the first card, so a
-        retried request changes nothing.
+        retried request changes nothing. A success that arrives after the
+        15-minute hold is confirmed while the slot is still free. If another
+        booking took the slot, the answer is 409 and the booking stays
+        unpaid.
       parameters:
         - $ref: "#/components/parameters/BookingId"
       requestBody:
@@ -539,12 +547,15 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/BookingNotFound"
+        "409": { $ref: "#/components/responses/HoldExpired" }
 
   /bookings/{bookingId}/payable:
     get:
       tags: [bookings]
       summary: Check that a booking can be paid.
-      description: Called before the card is charged.
+      description: >
+        Called before the card is charged. 409 means the 15-minute hold has
+        expired, so do not charge.
       parameters:
         - $ref: "#/components/parameters/BookingId"
       responses:
@@ -564,6 +575,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/BookingNotFound"
+        "409": { $ref: "#/components/responses/HoldExpired" }
 
   /bookings/{bookingId}/unlockable:
     get:
@@ -827,6 +839,14 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "booking not found" }
+    HoldExpired:
+      description: >
+        The booking is unpaid and older than 15 minutes (SP-R07): its hold has
+        expired. On `/paid`, another booking has taken the slot.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "booking hold has expired" }
     BadWindow:
       description: >
         start_time/end_time were not given together, aren't valid ISO 8601

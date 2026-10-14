@@ -190,9 +190,20 @@ def find_booking(booking_id):
 def cancel_booking(booking_id):
     with current_app.db.cursor() as cur:
         row = purchase.booking.cancel_booking(cur, booking_id)
-    if row is None:
-        return jsonify(error="booking not found"), 404
+        if row is None:  # refused: 404 unknown or cancelled, 409 started
+            payload, status = purchase.booking.check_cancellable(cur, booking_id)
+            return jsonify(payload), status
     return jsonify(purchase.booking.booking_to_json(row))
+
+
+@purchase_bp.get("/bookings/<int:booking_id>/cancellable")
+def check_cancellable(booking_id):
+    with current_app.db.cursor() as cur:
+        refusal = purchase.booking.check_cancellable(cur, booking_id)
+    if refusal is None:
+        return "", 204
+    payload, status = refusal
+    return jsonify(payload), status
 
 
 @purchase_bp.get("/bookings/<int:booking_id>/unlockable")

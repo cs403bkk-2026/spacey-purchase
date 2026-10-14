@@ -471,6 +471,8 @@ paths:
         Soft: the booking is kept but cancelled, whether or not it was
         paid. It then reads as 404, is not listed or counted, and blocks no
         slot. Cancelling again answers 404.
+        Only before the booking starts (SP-R09, by the database clock): from
+        its start time on, the answer is 409 and nothing changes.
       responses:
         "200":
           description: The booking as it was just before the cancel.
@@ -492,6 +494,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/BookingNotFound"
+        "409":
+          $ref: "#/components/responses/BookingStarted"
 
   /bookings/{bookingId}/paid:
     post:
@@ -597,6 +601,23 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/BookingNotFound"
+
+  /bookings/{bookingId}/cancellable:
+    get:
+      tags: [bookings]
+      summary: Check that a booking may be cancelled.
+      description: Called before a cancel. Changes nothing.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "204":
+          description: The booking has not started yet, so it may be cancelled. No body.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+        "409":
+          $ref: "#/components/responses/BookingStarted"
 
   /register:
     post:
@@ -839,6 +860,14 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: "booking not found" }
+    BookingStarted:
+      description: >
+        The booking's start time has passed (SP-R09), so it can no longer be
+        cancelled.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "booking has already started" }
     HoldExpired:
       description: >
         The booking is unpaid and older than 15 minutes (SP-R07): its hold has

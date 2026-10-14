@@ -24,6 +24,7 @@ CONTRACT = {
     "POST /bookings/{bookingId}/paid",
     "GET /bookings/{bookingId}/payable",
     "GET /bookings/{bookingId}/unlockable",
+    "GET /bookings/{bookingId}/cancellable",
     "POST /test/reset",
 }
 SPACE = {"id", "name", "capacity", "price_cents"}

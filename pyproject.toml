@@ -17,7 +17,7 @@ dev = [
 
 [tool.ruff]
 # An exact copy of spacey's start-up DDL, so ruff leaves it alone.
-extend-exclude = ["tests/fixtures/spacey_schema_88ec849.py"]
+extend-exclude = ["tests/fixtures/spacey_schema_*.py"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "C4", "ERA", "N", "PTH", "RET", "SIM"]

@@ -1,0 +1,26 @@
+# The switch rehearsal (scripts/rehearse_switch.sh): spacey's old DB, our new
+# DB, this service, and spacey at HUB_REF. The hub is armed from the start, as
+# production may be: PURCHASE_URL and PURCHASE_TOKEN set, the switch row off.
+x-db: &db
+  image: postgres:16
+  environment: {POSTGRES_PASSWORD: rehearsal}
+  healthcheck: {test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, retries: 15}
+services:
+  olddb: {<<: *db, ports: ["5436:5432"]}
+  newdb: {<<: *db, ports: ["5437:5432"]}
+  purchase:  # as in production: no PURCHASE_TEST_RESET, no SEED_STARTER_SPACE
+    build: .
+    environment: {DATABASE_URL: "postgresql://postgres:rehearsal@newdb/postgres", PURCHASE_TOKEN: rehearsal}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      retries: 15
+    depends_on: {newdb: {condition: service_healthy}}
+  hub:
+    build: https://github.com/cs403bkk-2026/spacey.git#${HUB_REF:?set HUB_REF}
+    environment:
+      DATABASE_URL: postgresql://spacey:rehearsal@olddb/spacey  # the owner, not a superuser
+      PURCHASE_URL: ${PURCHASE_URL-http://purchase:8000}  # empty = the URL lost
+      PURCHASE_TOKEN: ${PURCHASE_TOKEN:-rehearsal}
+    ports: ["8000:8000"]
+    depends_on: {olddb: {condition: service_healthy}, purchase: {condition: service_healthy}}

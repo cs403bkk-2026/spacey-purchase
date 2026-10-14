@@ -1,9 +1,10 @@
--- Remove the freeze that freeze.sql adds, so the old tables take every write
--- again. Safe to run twice.
-DROP TRIGGER IF EXISTS purchase_frozen ON users;
-DROP TRIGGER IF EXISTS purchase_frozen_truncate ON users;
-DROP TRIGGER IF EXISTS purchase_frozen ON spaces;
-DROP TRIGGER IF EXISTS purchase_frozen_truncate ON spaces;
-DROP TRIGGER IF EXISTS purchase_frozen ON bookings;
-DROP TRIGGER IF EXISTS purchase_frozen_truncate ON bookings;
-DROP FUNCTION IF EXISTS purchase_refuse_write();
+-- Unfreeze: the old tables take every write again, and the hub runs the old
+-- SQL. Refused while the switch is on: a rollback runs freeze.sql and
+-- --repair twice first. Safe to run twice.
+DO $$
+BEGIN
+    UPDATE purchase_switch SET state = 'off' WHERE state <> 'on';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'refused: the switch is on (run freeze.sql, then --repair twice)';
+    END IF;
+END $$;

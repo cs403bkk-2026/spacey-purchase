@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -6,12 +8,12 @@ from pathlib import Path
 import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
-from psycopg.errors import ReadOnlySqlTransaction
+from psycopg.errors import RaiseException, ReadOnlySqlTransaction
 from psycopg.rows import dict_row
 
 from purchase.migrations import run_migrations
 from scripts.copy_from_spacey import anomaly, main, map_booking
-from tests.fixtures.spacey_schema_88ec849 import create_tables
+from tests.fixtures.spacey_schema_f34a4b8 import create_tables
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 TABLES = ("users", "spaces", "subscriptions", "bookings")
@@ -256,11 +258,9 @@ def leave_unfrozen(url):
     pass
 
 
-def freeze_bookings_only(url):
+def freeze_then_unfreeze(url):
     freeze(url)
-    for table in ("users", "spaces"):
-        execute(url, f"DROP TRIGGER purchase_frozen ON {table}")
-        execute(url, f"DROP TRIGGER purchase_frozen_truncate ON {table}")
+    run_sql_file(url, "unfreeze.sql")
 
 
 def freeze_with_an_anomaly(url):
@@ -276,12 +276,12 @@ def freeze_with_an_anomaly(url):
             "refused: old is not frozen (run scripts/freeze.sql on OLD_URL)",
         ),
         (
-            freeze_bookings_only,
+            freeze_then_unfreeze,
             "refused: old is not frozen (run scripts/freeze.sql on OLD_URL)",
         ),
         (freeze_with_an_anomaly, "anomaly booking 4: amount_cents is NULL"),
     ],
-    ids=["not frozen", "bookings only", "anomaly"],
+    ids=["not frozen", "unfrozen again", "anomaly"],
 )
 def test_apply_refuses_and_writes_nothing(old_url, new_url, capsys, prepare, message):
     prepare(old_url)
@@ -449,6 +449,93 @@ def test_freeze_refuses_every_write(old_url, statement):
     run_sql_file(old_url, "unfreeze.sql")
     execute(old_url, statement)
     assert table_rows(old_url) != before
+
+
+def switch_state(url):
+    return fetch(url, "SELECT state FROM purchase_switch")[0]["state"]
+
+
+def test_switch_on_needs_the_freeze(old_url):
+    with pytest.raises(RaiseException, match="not frozen"):
+        run_sql_file(old_url, "switch_on.sql")
+    assert switch_state(old_url) == "off"
+
+    freeze(old_url)
+    run_sql_file(old_url, "switch_on.sql")
+    run_sql_file(old_url, "switch_on.sql")
+
+    assert switch_state(old_url) == "on"
+
+
+def test_unfreeze_waits_for_the_rollback(old_url):
+    freeze(old_url)
+    run_sql_file(old_url, "switch_on.sql")
+
+    with pytest.raises(RaiseException, match="switch is on"):
+        run_sql_file(old_url, "unfreeze.sql")
+    assert switch_state(old_url) == "on"
+
+    freeze(old_url)  # the rollback's first step
+    run_sql_file(old_url, "unfreeze.sql")
+    run_sql_file(old_url, "unfreeze.sql")
+    assert switch_state(old_url) == "off"
+
+
+def test_freeze_waits_for_a_booking_in_flight(old_url):
+    """A booking locks bookings first, then its key's row in spaces. The freeze
+    takes bookings first too, or the two deadlock and the booking fails."""
+    errors = []
+
+    def freeze_in_background():
+        try:
+            freeze(old_url)
+        except psycopg.Error as error:
+            errors.append(type(error).__name__)
+
+    with psycopg.connect(old_url) as conn:
+        conn.execute("UPDATE bookings SET member = member WHERE id = 3")
+        thread = threading.Thread(target=freeze_in_background)
+        thread.start()
+        time.sleep(0.5)  # the freeze now waits for this transaction
+        conn.execute(
+            "INSERT INTO bookings (space_id, member, start_time, end_time, "
+            "amount_cents, paid) VALUES (3, 'cy', %s, %s, 1000, FALSE)",
+            (at(14), at(15)),
+        )
+        conn.commit()
+    thread.join(10)
+
+    assert errors == []
+    assert switch_state(old_url) == "frozen"
+
+
+def test_repair_waits_for_a_mirror_write_in_flight(old_url, new_url):
+    """The mirror's write locks bookings first, then its key's row in spaces.
+    The repair takes bookings first too, or the two deadlock."""
+    copy(old_url, new_url)
+    errors = []
+
+    def repair_in_background():
+        try:
+            main([old_url, new_url, "--repair"])
+        except psycopg.Error as error:
+            errors.append(type(error).__name__)
+
+    with psycopg.connect(old_url) as conn:
+        conn.execute("SET LOCAL purchase.mirror = 'on'")
+        conn.execute("UPDATE bookings SET member = member WHERE id = 3")
+        thread = threading.Thread(target=repair_in_background)
+        thread.start()
+        time.sleep(0.5)  # the repair now waits for this transaction
+        conn.execute(
+            "INSERT INTO bookings (space_id, member, start_time, end_time, "
+            "amount_cents, paid) VALUES (3, 'cy', %s, %s, 1000, FALSE)",
+            (at(14), at(15)),
+        )
+        conn.commit()
+    thread.join(10)
+
+    assert errors == []
 
 
 def test_freeze_lets_the_mirror_flag_through(old_url):

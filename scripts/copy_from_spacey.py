@@ -112,14 +112,8 @@ SEQUENCE_TABLES = ("users", "spaces", "bookings")
 
 # The freeze is on only when all 6 rows come back: both triggers on each of
 # users, spaces and bookings.
-FREEZE_TRIGGERS = """
-SELECT tgrelid::regclass::text AS table_name, tgname
-FROM pg_trigger
-WHERE tgname IN ('purchase_frozen', 'purchase_frozen_truncate')
-  AND tgenabled <> 'D'
-  AND tgrelid::regclass::text IN ('users', 'spaces', 'bookings')
-"""
-FROZEN_TRIGGER_COUNT = 6
+# The hub's switch (PUR-025): 'frozen' and 'on' both freeze the old tables.
+SWITCH_STATE = "SELECT state FROM purchase_switch"
 
 # 0 when the sequence has handed out no id yet.
 SEQUENCE_LAST_VALUE = """
@@ -224,11 +218,11 @@ def read_old(url: str) -> dict:
     """The old tables, their sequences, whether the freeze is on and now(),
     from one snapshot on old's clock."""
     with connect_read_only(url) as conn:
-        triggers = conn.execute(FREEZE_TRIGGERS).fetchall()
+        state = conn.execute(SWITCH_STATE).fetchone()["state"]
         return {
             "tables": read_tables(conn, OLD_COLUMNS),
             "sequences": read_sequences(conn),
-            "frozen": len(triggers) == FROZEN_TRIGGER_COUNT,
+            "frozen": state != "off",
             "now": conn.execute("SELECT now() AS now").fetchone()["now"],
         }
 
@@ -465,7 +459,8 @@ def repair(old_url: str, new_url: str) -> int:
         conn.execute("SET LOCAL purchase.mirror = 'on'")
         # Mirror writes wait for this lock, so a service write the snapshot
         # below misses reaches old after this commits, and is not undone.
-        conn.execute("LOCK TABLE users, spaces, bookings IN EXCLUSIVE MODE")
+        # bookings first, as a write takes them (then its keys), or the two deadlock.
+        conn.execute("LOCK TABLE bookings, spaces, users IN EXCLUSIVE MODE")
         new = read_mirror_source(new_url)
         old = read_tables(conn, {t: OLD_COLUMNS[t] for t in SEQUENCE_TABLES})
         old_sequences = read_sequences(conn)

@@ -11,7 +11,7 @@ traffic switch runs in this workflow (those are PUR-017 and PUR-025).
 |---|---|
 | Address | `https://purchase.cs403bkk26.space` |
 | Health | `GET /health` → `{"status": "ok", "revision": "<git sha>"}`, or `503` with `{"status": "error", "error": "database unreachable"}` from PUR-016 on |
-| Deployed revision | `6b827779debad7efdf840f10683719fb29cda6a6` (PR #39), image `ghcr.io/cs403bkk-2026/spacey-purchase@sha256:194b32f3142ff2d9ba739a548283c67889ac2171e35009b0f6184518a113158d`, [release run 38204845453](https://github.com/cs403bkk-2026/spacey-purchase/actions/runs/38204845453), `/health` reported it at 2026-10-12T04:43:08Z |
+| Deployed revision | `4b6b1b9565ed956e9336d65da9d65f5f6fa9f60e` (PR #66, PUR-024), image `ghcr.io/cs403bkk-2026/spacey-purchase@sha256:37627dffbe664efcacde27cbf2936029d1ba50524a60ffc276bf47274f553c15`, [release run 38519721874](https://github.com/cs403bkk-2026/spacey-purchase/actions/runs/38519721874), `/health` reported it at 2026-10-14T06:12:34Z |
 
 Update this table after each verified release: source SHA, image digest,
 workflow run URL and the time `/health` reported that SHA.

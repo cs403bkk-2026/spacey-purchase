@@ -459,7 +459,8 @@ def repair(old_url: str, new_url: str) -> int:
         conn.execute("SET LOCAL purchase.mirror = 'on'")
         # Mirror writes wait for this lock, so a service write the snapshot
         # below misses reaches old after this commits, and is not undone.
-        conn.execute("LOCK TABLE users, spaces, bookings IN EXCLUSIVE MODE")
+        # bookings first, as a write takes them (then its keys), or the two deadlock.
+        conn.execute("LOCK TABLE bookings, spaces, users IN EXCLUSIVE MODE")
         new = read_mirror_source(new_url)
         old = read_tables(conn, {t: OLD_COLUMNS[t] for t in SEQUENCE_TABLES})
         old_sequences = read_sequences(conn)

@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -477,6 +479,63 @@ def test_unfreeze_waits_for_the_rollback(old_url):
     run_sql_file(old_url, "unfreeze.sql")
     run_sql_file(old_url, "unfreeze.sql")
     assert switch_state(old_url) == "off"
+
+
+def test_freeze_waits_for_a_booking_in_flight(old_url):
+    """A booking locks bookings first, then its key's row in spaces. The freeze
+    takes bookings first too, or the two deadlock and the booking fails."""
+    errors = []
+
+    def freeze_in_background():
+        try:
+            freeze(old_url)
+        except psycopg.Error as error:
+            errors.append(type(error).__name__)
+
+    with psycopg.connect(old_url) as conn:
+        conn.execute("UPDATE bookings SET member = member WHERE id = 3")
+        thread = threading.Thread(target=freeze_in_background)
+        thread.start()
+        time.sleep(0.5)  # the freeze now waits for this transaction
+        conn.execute(
+            "INSERT INTO bookings (space_id, member, start_time, end_time, "
+            "amount_cents, paid) VALUES (3, 'cy', %s, %s, 1000, FALSE)",
+            (at(14), at(15)),
+        )
+        conn.commit()
+    thread.join(10)
+
+    assert errors == []
+    assert switch_state(old_url) == "frozen"
+
+
+def test_repair_waits_for_a_mirror_write_in_flight(old_url, new_url):
+    """The mirror's write locks bookings first, then its key's row in spaces.
+    The repair takes bookings first too, or the two deadlock."""
+    copy(old_url, new_url)
+    errors = []
+
+    def repair_in_background():
+        try:
+            main([old_url, new_url, "--repair"])
+        except psycopg.Error as error:
+            errors.append(type(error).__name__)
+
+    with psycopg.connect(old_url) as conn:
+        conn.execute("SET LOCAL purchase.mirror = 'on'")
+        conn.execute("UPDATE bookings SET member = member WHERE id = 3")
+        thread = threading.Thread(target=repair_in_background)
+        thread.start()
+        time.sleep(0.5)  # the repair now waits for this transaction
+        conn.execute(
+            "INSERT INTO bookings (space_id, member, start_time, end_time, "
+            "amount_cents, paid) VALUES (3, 'cy', %s, %s, 1000, FALSE)",
+            (at(14), at(15)),
+        )
+        conn.commit()
+    thread.join(10)
+
+    assert errors == []
 
 
 def test_freeze_lets_the_mirror_flag_through(old_url):

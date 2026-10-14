@@ -192,14 +192,22 @@ spacey's restart the hub runs the old SQL. The freeze refuses its writes (503),
 and reads come from the old tables, which the mirror kept current. Do the
 Rollback, or wait until the URL is back.
 
-## The stable week
+## The stable period
 
-1. Once a day:
+The course ends on 15 October 2026, so stable is not a number of days
+(product owner, 14 October 2026). It holds when:
+
+1. Switch steps 7 to 11 passed.
+2. The product owner's hand test on the real app passed: register, log in,
+   book, pay, unlock and cancel, each as a user would.
+3. spacey's log has no `purchase mirror failed` line, or `copy --repair` fixed
+   each one:
    `nomad alloc logs -namespace=startup -stderr -job spacey spacey | grep -e 'purchase mirror failed' -e 'purchase service check' | tail`.
-2. A new `purchase mirror failed` line: run `copy --repair` and post its three
-   count lines on #37. A `check: failed` line after a restart of spacey: check
-   `$SERVICE_URL/health`, and do the Rollback if Purchase routes answer 503.
-3. After 7 days with no rollback, close #37.
+
+Then close #37. Until PUR-026 is live, check that log once a day. A new
+`purchase mirror failed` line: run `copy --repair` and post its three count
+lines on #37. A `check: failed` line after a restart of spacey: check
+`$SERVICE_URL/health`, and do the Rollback if Purchase routes answer 503.
 
 ## Rehearsal
 

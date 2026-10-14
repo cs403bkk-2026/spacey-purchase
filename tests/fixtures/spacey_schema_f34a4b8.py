@@ -5,8 +5,8 @@ database ends up with every table and column the app needs."""
 def create_tables(cur) -> None:
     """Create or upgrade every table the app uses. Safe to run on every
     start: each statement is IF NOT EXISTS or only fills in missing data.
-    All tables live here for now, including ones other contexts use
-    (subscriptions, access, bookings.card_last4)."""
+    Tables other contexts use live here for now (subscriptions,
+    bookings.card_last4); payments and access have their own migrations."""
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS spaces (
@@ -37,20 +37,6 @@ def create_tables(cur) -> None:
             member TEXT PRIMARY KEY,
             active BOOLEAN NOT NULL DEFAULT TRUE,
             started_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
-    )
-    # The access code handed out when a booking is unlocked (#171).
-    # One code per booking, kept so a page refresh shows the same code
-    # instead of a new one. ON DELETE CASCADE because cancelling a
-    # booking deletes its row, and the code is worthless without it.
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS access (
-            booking_id INTEGER PRIMARY KEY
-                REFERENCES bookings (id) ON DELETE CASCADE,
-            access_code TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """
     )
@@ -123,5 +109,65 @@ def create_tables(cur) -> None:
                 );
             END IF;
         END $$;
+        """
+    )
+    # PUR-025: the switch, which the Purchase team sets with its own database
+    # login: no Nomad variable, no restart. 'off': the old SQL runs, as
+    # before. 'frozen': the old SQL still runs, but the three tables below
+    # refuse every write except the mirror's and the repair's (their
+    # transaction sets purchase.mirror). 'on': with PURCHASE_URL set, the
+    # service answers (client.enabled), and the tables stay frozen.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS purchase_switch (
+            one BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one),
+            state TEXT NOT NULL DEFAULT 'off'
+                CHECK (state IN ('off', 'frozen', 'on'))
+        )
+        """
+    )
+    cur.execute("INSERT INTO purchase_switch DEFAULT VALUES ON CONFLICT DO NOTHING")
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION purchase_refuse_write() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF current_setting('purchase.mirror', true) = 'on'
+               OR (SELECT state FROM purchase_switch) = 'off' THEN
+                IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                RETURN NEW;
+            END IF;
+            RAISE EXCEPTION 'purchase: % on % refused: table frozen',
+                TG_OP, TG_TABLE_NAME USING ERRCODE = 'read_only_sql_transaction';
+        END $$
+        """
+    )
+    for table in ("users", "spaces", "bookings"):
+        cur.execute(
+            f"CREATE OR REPLACE TRIGGER purchase_frozen "
+            f"BEFORE INSERT OR UPDATE OR DELETE ON {table} "
+            f"FOR EACH ROW EXECUTE FUNCTION purchase_refuse_write()"
+        )
+        cur.execute(
+            f"CREATE OR REPLACE TRIGGER purchase_frozen_truncate "
+            f"BEFORE TRUNCATE ON {table} "
+            f"FOR EACH STATEMENT EXECUTE FUNCTION purchase_refuse_write()"
+        )
+    # Only the Purchase team's logins may change the switch. The database's
+    # default privileges give every student login (spacey_students) write
+    # access to each new table, so take it back here. Roles that don't exist
+    # (a local or CI database) are skipped.
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+            IF to_regrole('spacey_students') IS NOT NULL THEN
+                REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON purchase_switch
+                    FROM spacey_students;
+            END IF;
+            IF to_regrole('team_purchase') IS NOT NULL THEN
+                GRANT SELECT, UPDATE ON purchase_switch TO team_purchase;
+            END IF;
+        END $$
         """
     )

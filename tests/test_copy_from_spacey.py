@@ -6,12 +6,12 @@ from pathlib import Path
 import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
-from psycopg.errors import ReadOnlySqlTransaction
+from psycopg.errors import RaiseException, ReadOnlySqlTransaction
 from psycopg.rows import dict_row
 
 from purchase.migrations import run_migrations
 from scripts.copy_from_spacey import anomaly, main, map_booking
-from tests.fixtures.spacey_schema_88ec849 import create_tables
+from tests.fixtures.spacey_schema_f34a4b8 import create_tables
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 TABLES = ("users", "spaces", "subscriptions", "bookings")
@@ -256,11 +256,9 @@ def leave_unfrozen(url):
     pass
 
 
-def freeze_bookings_only(url):
+def freeze_then_unfreeze(url):
     freeze(url)
-    for table in ("users", "spaces"):
-        execute(url, f"DROP TRIGGER purchase_frozen ON {table}")
-        execute(url, f"DROP TRIGGER purchase_frozen_truncate ON {table}")
+    run_sql_file(url, "unfreeze.sql")
 
 
 def freeze_with_an_anomaly(url):
@@ -276,12 +274,12 @@ def freeze_with_an_anomaly(url):
             "refused: old is not frozen (run scripts/freeze.sql on OLD_URL)",
         ),
         (
-            freeze_bookings_only,
+            freeze_then_unfreeze,
             "refused: old is not frozen (run scripts/freeze.sql on OLD_URL)",
         ),
         (freeze_with_an_anomaly, "anomaly booking 4: amount_cents is NULL"),
     ],
-    ids=["not frozen", "bookings only", "anomaly"],
+    ids=["not frozen", "unfrozen again", "anomaly"],
 )
 def test_apply_refuses_and_writes_nothing(old_url, new_url, capsys, prepare, message):
     prepare(old_url)
@@ -449,6 +447,36 @@ def test_freeze_refuses_every_write(old_url, statement):
     run_sql_file(old_url, "unfreeze.sql")
     execute(old_url, statement)
     assert table_rows(old_url) != before
+
+
+def switch_state(url):
+    return fetch(url, "SELECT state FROM purchase_switch")[0]["state"]
+
+
+def test_switch_on_needs_the_freeze(old_url):
+    with pytest.raises(RaiseException, match="not frozen"):
+        run_sql_file(old_url, "switch_on.sql")
+    assert switch_state(old_url) == "off"
+
+    freeze(old_url)
+    run_sql_file(old_url, "switch_on.sql")
+    run_sql_file(old_url, "switch_on.sql")
+
+    assert switch_state(old_url) == "on"
+
+
+def test_unfreeze_waits_for_the_rollback(old_url):
+    freeze(old_url)
+    run_sql_file(old_url, "switch_on.sql")
+
+    with pytest.raises(RaiseException, match="switch is on"):
+        run_sql_file(old_url, "unfreeze.sql")
+    assert switch_state(old_url) == "on"
+
+    freeze(old_url)  # the rollback's first step
+    run_sql_file(old_url, "unfreeze.sql")
+    run_sql_file(old_url, "unfreeze.sql")
+    assert switch_state(old_url) == "off"
 
 
 def test_freeze_lets_the_mirror_flag_through(old_url):

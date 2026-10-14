@@ -85,6 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -t purchase-ci .
+      - name: The copy script and its imports are in the image
+        run: docker run --rm purchase-ci python scripts/copy_from_spacey.py --help
       - name: /health reports this revision, as the release smoke test checks
         run: |
           docker run -d --name smoke --network host \

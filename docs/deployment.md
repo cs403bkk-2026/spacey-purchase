@@ -5,10 +5,6 @@ Deployment is enabled. From PUR-016 on, the service needs `DATABASE_URL` and
 runs `SELECT 1`, so a healthy check also covers the database. No data copy or
 traffic switch runs in this workflow (those are PUR-017 and PUR-025).
 
-Do not release a revision that contains PUR-016 until PUR-024 has stored
-`purchase_token` in the runtime variable and added it to the job file: without
-it the service refuses to start, and Nomad reverts the release.
-
 ## Service address and deployed revision
 
 | | |
@@ -37,12 +33,19 @@ can read it without broader variable permissions.
 
 | Item | Value |
 |---|---|
-| `database_url` | The Purchase database and its runtime login, never spacey's. Rendered into `DATABASE_URL`. |
-| `purchase_token` | The shared caller token, rendered into `PURCHASE_TOKEN`. Provision before release and keep it consistent with the caller. |
+| `database_url` | The Purchase database and login, never spacey's. The platform owner runs `CREATE EXTENSION btree_gist` in it once; without it the first migration fails and nothing is applied. |
+| `purchase_token` | 64 hex characters (`python3 -c 'import secrets; print(secrets.token_hex(32))'`). Every request except `GET /health` must send `Authorization: Bearer <purchase_token>`. Only the hub calls this service: PUR-025 puts the same value in spacey's runtime variable. Payments' callback goes to the hub, not here (PUR-027). Never paste it in an issue, PR or chat. |
 
-The platform owner stores it. It must never be passed as a job argument,
-committed, or copied into GitHub. A missing item fails the release instead of
-starting the service without it.
+The platform owner stores `database_url`. Our SRE stores `purchase_token`
+(PUR-024). Never pass either as a job argument, commit it, or copy it into
+GitHub. The service has no `PAYMENTS_URL` or `SERVICE_TOKEN`: PUR-027 gives
+those to the hub.
+
+The job renders both items with `error_on_missing_key = true`, so a missing item
+fails the release. Every push to `main` releases, so store a new item before
+merging the job file change that reads it. The job never sets
+`PURCHASE_TEST_RESET` or `SEED_STARTER_SPACE`, and it runs the image's own
+command, with one thread per worker (`tests/test_deploy_config.py`).
 
 ## Platform setup
 
@@ -95,6 +98,63 @@ first job or redeploys the recorded previous digest and revision, then checks
 `/health` again. This single-instance job does not promise uninterrupted
 updates.
 
+## Checks after a release (no traffic yet)
+
+Until PUR-025 nothing calls the service and the Purchase database stays empty:
+create no space, user or booking in it, and run the copy script only with
+`--dry-run`. `SHA` is the full hash of the released commit. `T` is the token,
+read without printing it:
+`T=$(nomad var get -namespace="$NS" -out=json "$VAR" | jq -r .Items.purchase_token)`.
+
+1. `nomad var get -namespace="$NS" -out=json "$VAR" | jq -c '.Items | keys'`
+   prints `["database_url","purchase_token"]`.
+2. `curl -s "https://$HOST/health" | jq -e --arg r "$SHA" '.status == "ok" and .revision == $r'`
+   prints `true`. Check it before the next merge to `main`: each merge releases
+   a newer revision.
+3. `curl -s -o /dev/null -w '%{http_code}\n' "https://$HOST/spaces"` prints
+   `403`. The same with `-H 'Authorization: Bearer wrong'` also prints `403`.
+4. `curl -s -H "Authorization: Bearer $T" "https://$HOST/metrics" | jq -c '{spaces, bookings}'`
+   prints `{"spaces":0,"bookings":0}`. In the allocation
+   (`nomad alloc exec -namespace="$NS" -i -t -job "$JOB" bash`), this prints
+   every table with its row count:
+
+   ```sh
+   python -c 'import os, psycopg; c = psycopg.connect(os.environ["DATABASE_URL"]); print([(t, c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]) for (t,) in c.execute("SELECT tablename FROM pg_tables WHERE schemaname = current_schema() ORDER BY 1")])'
+   ```
+
+   Expect `[('bookings', 0), ('purchase_schema_migrations', N), ('spaces', 0), ('subscriptions', 0), ('users', 0)]`,
+   where `N` is the number of migration files (`ls purchase/migrations/*.sql | wc -l`).
+   The same holds after the dry run.
+5. Read spacey's live numbers and note the UTC time:
+   `curl -s https://spacey.cs403bkk26.space/metrics | jq -c '{spaces, bookings, paid_bookings, unpaid_bookings}'`.
+   In the allocation, run the dry run with a read-only login URL for spacey's
+   database (`read -rs` keeps it off the screen and out of the shell history):
+
+   ```sh
+   read -rs OLD_URL    # paste the read-only URL, then press Enter
+   python scripts/copy_from_spacey.py "$OLD_URL" "$DATABASE_URL" --dry-run
+   ```
+
+   Read the live numbers again; if they changed, run this step again. The dry
+   run exits 0 and prints `anomalies: none` and `new 0` for every table. Its
+   counts equal both live readings:
+
+   | Dry run line | Live `/metrics` key |
+   |---|---|
+   | `rows spaces: old N` | `spaces` |
+   | `rows bookings: old N` | `bookings` |
+   | `paid=true -> completed N` | `paid_bookings` |
+   | `paid=false -> expired N` plus `paid=false -> pending N` | `unpaid_bookings` |
+
+   `users`, `subscriptions` and the sequence values have no public count:
+   record them.
+6. A second dry run prints the same counts while the live numbers have not
+   changed. Only one move is allowed: a booking from `pending` to `expired`,
+   when its 15-minute hold ran out between the two runs. The sum of the two
+   stays the same.
+
+Record counts, ids and times only, never a name, token or database URL.
+
 ## SRE check
 
 The team SRE checks the deployment with their own access:
@@ -105,5 +165,5 @@ curl --fail --silent --show-error https://purchase.cs403bkk26.space/health
 ```
 
 The revision in the response must match the deployed revision above. Record the
-actual result or blocker in issue #15; platform verification alone does not
-establish the SRE's access.
+actual result or blocker in issue #36 (PUR-024); platform verification alone
+does not establish the SRE's access.

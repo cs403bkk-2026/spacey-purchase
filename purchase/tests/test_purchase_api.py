@@ -23,6 +23,7 @@ CONTRACT = {
     "POST /bookings/<int:booking_id>/paid",
     "DELETE /bookings/<int:booking_id>",
     "GET /bookings/<int:booking_id>/unlockable",
+    "GET /bookings/<int:booking_id>/cancellable",
     "POST /register",
     "POST /users/authenticate",
     "GET /users/<int:user_id>/bookings",
@@ -459,7 +460,7 @@ def test_find_unknown_booking_returns_404():
 def test_cancel_booking_makes_space_available_again():
     client = make_client()
     created = client.post(
-        "/spaces/1/bookings", json={"member": "annabel", **slot(-1, 1)}
+        "/spaces/1/bookings", json={"member": "annabel", **slot(1, 2)}
     ).get_json()
 
     response = client.delete(f"/bookings/{created['id']}")
@@ -467,7 +468,7 @@ def test_cancel_booking_makes_space_available_again():
     assert response.status_code == 200
     assert response.get_json() == created
 
-    spaces = client.get("/spaces").get_json()["spaces"]
+    spaces = client.get("/spaces", query_string=slot(1, 2)).get_json()["spaces"]
     founders_desk = next(s for s in spaces if s["id"] == 1)
     assert founders_desk["available"] is True
 

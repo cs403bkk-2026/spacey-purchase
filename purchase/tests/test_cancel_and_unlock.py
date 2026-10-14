@@ -113,8 +113,14 @@ def test_a_cancelled_booking_reads_as_missing():
 
 def test_a_cancelled_booking_frees_its_slot():
     client = make_client()
-    booking = book(client, start_hours=-1, end_hours=1)
+    booking = book(client)
     cancel(client, booking["id"])
+    with client.application.db.cursor() as cur:
+        cur.execute(
+            "UPDATE bookings SET start_time = now() - interval '1 hour', "
+            "end_time = now() + interval '1 hour' WHERE id = %s",
+            (booking["id"],),
+        )
 
     now = client.get("/spaces/booked-ids").get_json()
     window = client.get("/spaces/booked-ids", query_string=slot(-1, 1)).get_json()

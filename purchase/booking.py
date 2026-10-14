@@ -169,6 +169,18 @@ def check_unlockable(cur, booking_id) -> tuple[dict, int] | None:
     return None
 
 
+def check_cancellable(cur, booking_id) -> tuple[dict, int] | None:
+    """SP-R09: a booking may be cancelled only before its start, by the
+    database clock. Returns (payload, status) to answer with, or None if fine."""
+    booking = get_booking(cur, booking_id)
+    if booking is None:
+        return {"error": "booking not found"}, 404
+    cur.execute("SELECT %s <= now() AS started", (booking["start_time"],))
+    if cur.fetchone()["started"]:
+        return {"error": "booking has already started"}, 409
+    return None
+
+
 def check_payable(cur, booking_id):
     """May Payment collect, and how much? Collect only when status is
     "pending"; "completed" means already paid.
@@ -211,12 +223,14 @@ def mark_paid(cur, booking_id, card_last4) -> dict | None:
 
 
 def cancel_booking(cur, booking_id) -> dict | None:
-    """Soft cancel: the row as it was, or None if unknown or cancelled."""
+    """Soft cancel: the row as it was, or None if unknown, cancelled or
+    started (SP-R09; check_cancellable says which)."""
     with cur.connection.transaction():
         # FOR UPDATE waits for a payment in flight, so the answer shows it.
         cur.execute(
             f"SELECT {BOOKING_COLUMNS} FROM bookings "
-            "WHERE id = %s AND status <> 'cancelled' FOR UPDATE",
+            "WHERE id = %s AND status <> 'cancelled' AND start_time > now() "
+            "FOR UPDATE",
             (booking_id,),
         )
         row = cur.fetchone()

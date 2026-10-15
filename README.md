@@ -30,11 +30,13 @@ docker run --rm -p 8002:8000 --add-host=host.docker.internal:host-gateway \
 |---|---|
 | `DATABASE_URL` | Required. The Purchase database. |
 | `PURCHASE_TOKEN` | Required. The service token the hub sends as `Authorization: Bearer <token>`. |
+| `PAYMENTS_URL` | Optional. Payments' base URL, e.g. `https://payments.cs403bkk26.space`. With `SERVICE_TOKEN`, `/pay` charges and a cancel refunds through Payments; unset or empty, `/pay` answers `503` and nothing calls Payments. |
+| `SERVICE_TOKEN` | Optional. The token Payments shares with us, sent as `X-Service-Token`. Never logged. |
 | `APP_REVISION` | Optional. The revision `/health` reports; `local` when unset. |
 | `PURCHASE_TEST_RESET` | Tests and local runs only, never in production. `1` adds `POST /test/reset`, which empties the tables. |
 | `SEED_STARTER_SPACE` | Tests and local runs only, never in production. `true` adds the space "Founders Desk" to an empty database. |
 
-A missing required setting or an unreachable database stops the start with a `RuntimeError`.
+A missing required setting or an unreachable database stops the start with a `RuntimeError`. A missing Payments setting does not: each gunicorn worker logs `INFO payments check: ok` or `WARNING payments check: failed (<reason>)` at start when both are set.
 
 ## Endpoints
 

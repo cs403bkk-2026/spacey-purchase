@@ -193,7 +193,12 @@ def cancel_booking(booking_id):
         if row is None:  # refused: 404 unknown or cancelled, 409 started
             payload, status = purchase.booking.check_cancellable(cur, booking_id)
             return jsonify(payload), status
-    return jsonify(purchase.booking.booking_to_json(row))
+    payload = purchase.booking.booking_to_json(row)
+    # Only a cancel we accepted is refunded; the hub reads what it did.
+    refund = purchase.booking.refund_booking(booking_id, "cancellation")
+    if refund is not None:
+        payload["refund"] = refund
+    return jsonify(payload)
 
 
 @purchase_bp.get("/bookings/<int:booking_id>/cancellable")
@@ -242,9 +247,27 @@ def booking_paid(booking_id):
     ):
         return jsonify(error="send only card_last4, as 4 digits"), 400
     with current_app.db.cursor() as cur:
-        row = purchase.booking.mark_paid(cur, booking_id, body["card_last4"])
+        row = purchase.booking.apply_payment_result(cur, booking_id, body["card_last4"])
     if row is None:
         return jsonify(error="booking not found"), 404
     if not row["paid"]:
         return jsonify(error="booking hold has expired"), 409
     return jsonify(purchase.booking.booking_to_json(row)), 200
+
+
+@purchase_bp.post("/bookings/<int:booking_id>/pay")
+def pay_booking(booking_id):
+    """The hub's /pay body, passed on as sent; Payments checks the card."""
+    body = json_body()
+    with current_app.db.cursor() as cur:
+        payload, status = purchase.booking.mark_booking_paid(
+            cur,
+            booking_id,
+            body.get("card_number"),
+            body.get("expiry"),
+            body.get("cvc"),
+            force_failure=body.get("force_failure") is True,
+        )
+    if status == 200:
+        payload = purchase.booking.booking_to_json(payload)
+    return jsonify(payload), status

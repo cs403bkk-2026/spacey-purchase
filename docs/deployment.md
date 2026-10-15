@@ -35,17 +35,26 @@ can read it without broader variable permissions.
 |---|---|
 | `database_url` | The Purchase database and login, never spacey's. The platform owner runs `CREATE EXTENSION btree_gist` in it once; without it the first migration fails and nothing is applied. |
 | `purchase_token` | 64 hex characters (`python3 -c 'import secrets; print(secrets.token_hex(32))'`). Every request except `GET /health` must send `Authorization: Bearer <purchase_token>`. Only the hub calls this service: PUR-025 puts the same value in spacey's runtime variable. Payments' callback goes to the hub, not here (PUR-027). Never paste it in an issue, PR or chat. |
+| `payments_url` | `PAYMENTS_URL`: `https://payments.cs403bkk26.space`, or `""` to call Payments for nothing (`/pay` then answers `503`; a cancel refunds nothing here). The job maps that name to the cluster's proxy (`extra_hosts`), because a container is refused on the public address. |
+| `service_token` | `SERVICE_TOKEN`: Payments' `service_token`, passed out of band (PUR-027, ops step **Token**). Sent to Payments as `X-Service-Token`. Never print, paste or commit it. |
 
 The platform owner stores `database_url`. Our SRE stores `purchase_token`
-(PUR-024). Never pass either as a job argument, commit it, or copy it into
-GitHub. The service has no `PAYMENTS_URL` or `SERVICE_TOKEN`: PUR-027 gives
-those to the hub.
+(PUR-024), `service_token` and `payments_url` (PUR-027). Never pass any of them
+as a job argument, commit it, or copy it into GitHub.
+
+**Before the release of PUR-027's PR 1**, add `payments_url` as `""` (keeping
+the other items): `nomad var get -namespace="$NS" -out=json "$VAR" | jq '.Items.payments_url = ""' | nomad var put -namespace="$NS" -in=json -`.
+Turning Payments on later is setting it to the URL; the job restarts on the
+change. Each worker then logs one line:
+`nomad alloc logs -namespace="$NS" -job "$JOB" app | grep 'payments check' | tail -1`
+prints `INFO payments check: ok`.
 
 The job renders both items with `error_on_missing_key = true`, so a missing item
 fails the release. Every push to `main` releases, so store a new item before
 merging the job file change that reads it. The job never sets
 `PURCHASE_TEST_RESET` or `SEED_STARTER_SPACE`, and it runs the image's own
-command, with one thread per worker (`tests/test_deploy_config.py`).
+command, with one thread per worker (`tests/test_deploy_config.py`) and 3
+workers (`gunicorn.conf.py`, PUR-027), each with its own database connection.
 
 ## Platform setup
 
@@ -107,7 +116,7 @@ read without printing it:
 `T=$(nomad var get -namespace="$NS" -out=json "$VAR" | jq -r .Items.purchase_token)`.
 
 1. `nomad var get -namespace="$NS" -out=json "$VAR" | jq -c '.Items | keys'`
-   prints `["database_url","purchase_token"]`.
+   prints `["database_url","payments_url","purchase_token","service_token"]`.
 2. `curl -s "https://$HOST/health" | jq -e --arg r "$SHA" '.status == "ok" and .revision == $r'`
    prints `true`. Check it before the next merge to `main`: each merge releases
    a newer revision.

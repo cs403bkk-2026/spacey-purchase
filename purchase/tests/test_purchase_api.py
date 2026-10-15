@@ -21,6 +21,7 @@ CONTRACT = {
     "GET /bookings/<int:booking_id>",
     "GET /bookings/<int:booking_id>/payable",
     "POST /bookings/<int:booking_id>/paid",
+    "POST /bookings/<int:booking_id>/pay",
     "DELETE /bookings/<int:booking_id>",
     "GET /bookings/<int:booking_id>/unlockable",
     "GET /bookings/<int:booking_id>/cancellable",

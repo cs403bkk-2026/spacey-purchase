@@ -22,6 +22,7 @@ CONTRACT = {
     "GET /users/{userId}/bookings",
     "POST /users/authenticate",
     "POST /bookings/{bookingId}/paid",
+    "POST /bookings/{bookingId}/pay",
     "GET /bookings/{bookingId}/payable",
     "GET /bookings/{bookingId}/unlockable",
     "GET /bookings/{bookingId}/cancellable",
@@ -35,6 +36,7 @@ WRITES = {  # the success answer the hub's mirror copies into the old tables
     ("PATCH /spaces/{spaceId}", "200"): SPACE,
     ("POST /spaces/{spaceId}/bookings", "201"): BOOKING,
     ("POST /bookings/{bookingId}/paid", "200"): BOOKING,
+    ("POST /bookings/{bookingId}/pay", "200"): BOOKING,
     ("POST /register", "201"): {"id", "email"},
 }
 

@@ -16,7 +16,7 @@ Refs #<!-- issue; use "Closes #N" on the ticket's last PR -->
 - [ ] Tests cover every new rule, default and error branch
 - [ ] `openapi.yaml` is unchanged, or updated here and the change is described above
 - [ ] No migration, or it is a new numbered file and never edits a merged one
-- [ ] No other service is called; flows that depend on one are tested with each of its possible answers
+- [ ] Only Payments is called, only through `purchase/payments_client.py`; flows that depend on it are tested with each of its possible answers from an HTTP stub
 - [ ] If the module layout changed, the matching `spacey` PR is linked
 
 ## Not checked / risks

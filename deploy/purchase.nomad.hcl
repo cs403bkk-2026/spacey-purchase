@@ -56,6 +56,9 @@ job "purchase" {
       config {
         image = var.image
         ports = ["http"]
+        # PUR-027: from a container the public name is refused, so Payments
+        # is reached through the cluster's proxy.
+        extra_hosts = ["payments.cs403bkk26.space:192.168.171.100"]
       }
 
       env {
@@ -66,6 +69,8 @@ job "purchase" {
         data                 = <<EOH
 DATABASE_URL={{ with nomadVar "${var.runtime_variable}" }}{{ .database_url | toJSON }}{{ end }}
 PURCHASE_TOKEN={{ with nomadVar "${var.runtime_variable}" }}{{ .purchase_token | toJSON }}{{ end }}
+PAYMENTS_URL={{ with nomadVar "${var.runtime_variable}" }}{{ .payments_url | toJSON }}{{ end }}
+SERVICE_TOKEN={{ with nomadVar "${var.runtime_variable}" }}{{ .service_token | toJSON }}{{ end }}
 EOH
         destination          = "secrets/runtime.env"
         env                  = true

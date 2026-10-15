@@ -8,6 +8,10 @@ info:
     [ADR 0002](https://github.com/cs403bkk-2026/spacey-purchase/blob/main/docs/adr/0002-purchase-behind-the-spacey-hub.md).
 
 
+    The service calls one other service: Payments, for `/pay` and refunds,
+    through `purchase/payments_client.py` (PUR-027).
+
+
     Every operation except `GET /health` needs `Authorization: Bearer
     <PURCHASE_TOKEN>`. A missing or wrong token answers 403, so the only 401
     in this contract is the one from `POST /users/authenticate`.
@@ -473,12 +477,29 @@ paths:
         slot. Cancelling again answers 404.
         Only before the booking starts (SP-R09, by the database clock): from
         its start time on, the answer is 409 and nothing changes.
+        With `PAYMENTS_URL` and `SERVICE_TOKEN` set, an accepted cancel
+        refunds the booking's charge at Payments in full (reason
+        `cancellation`), paid or not; a refused one refunds nothing.
       responses:
         "200":
-          description: The booking as it was just before the cancel.
+          description: >
+            The booking as it was just before the cancel. `refund` is there
+            only when Payments is configured, and only for the hub.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Booking" }
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Booking"
+                  - type: object
+                    properties:
+                      refund:
+                        type: string
+                        enum: [refunded, no_charge, unavailable]
+                        description: >
+                          What the refund did: `refunded` (now or before),
+                          `no_charge` (Payments holds no charge for the
+                          booking), or `unavailable` (no usable answer from
+                          Payments; logged at ERROR).
               example:
                 id: 1
                 space_id: 1
@@ -490,6 +511,7 @@ paths:
                 user_id: 1
                 card_last4: "4242"
                 created_at: "2026-10-12T02:48:20.933270+00:00"
+                refund: refunded
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -508,7 +530,9 @@ paths:
         retried request changes nothing. A success that arrives after the
         15-minute hold is confirmed while the slot is still free. If another
         booking took the slot, the answer is 409 and the booking stays
-        unpaid.
+        unpaid. With `PAYMENTS_URL` and `SERVICE_TOKEN` set, a refused
+        result (409 or 404) refunds the booking's charge at Payments, if it
+        holds one (reason `hold_expired`).
       parameters:
         - $ref: "#/components/parameters/BookingId"
       requestBody:
@@ -552,6 +576,93 @@ paths:
         "404":
           $ref: "#/components/responses/BookingNotFound"
         "409": { $ref: "#/components/responses/HoldExpired" }
+
+  /bookings/{bookingId}/pay:
+    post:
+      tags: [bookings]
+      summary: Pay for a booking through Payments.
+      description: >
+        The hub's `/pay`, served here (PUR-027). The service checks the
+        15-minute hold, charges the card with Payments' `POST /payments`, and
+        marks the booking paid. The card details only pass through: they are
+        never stored or logged, and only Payments' `card_last4` is kept.
+        Paying an already-paid booking answers the stored row and charges
+        nothing. A retry after an unconfirmed outcome reuses the payment's
+        idempotency key; one after a declined card gets a new one, so a
+        booking is never charged twice. A booking at 0 cents is marked paid
+        with no call to Payments and `card_last4` null. A charge that cannot
+        be confirmed (the slot was taken or the booking cancelled meanwhile)
+        is refunded with reason `hold_expired`.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Read as the hub's `/pay` reads it; any other body counts as `{}`.
+              properties:
+                card_number: { type: string, writeOnly: true, example: "4242424242424242" }
+                expiry: { type: string, writeOnly: true, description: MM/YY, example: "12/30" }
+                cvc: { type: string, writeOnly: true, example: "123" }
+                force_failure:
+                  type: boolean
+                  default: false
+                  description: Test hook passed to Payments. Only a literal `true` counts.
+            example:
+              card_number: "4242424242424242"
+              expiry: "12/30"
+              cvc: "123"
+      responses:
+        "200":
+          description: Paid (or already was). The full row, as the hub's mirror copies it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+              example:
+                id: 1
+                space_id: 1
+                member: annabel
+                paid: true
+                start_time: "2030-01-01T10:00:00+00:00"
+                end_time: "2030-01-01T11:00:00+00:00"
+                amount_cents: 2500
+                user_id: 1
+                card_last4: "4242"
+                created_at: "2026-10-12T02:48:20.933270+00:00"
+        "400":
+          description: The card is invalid. Payments' message names the first problem found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: card_number is not a valid card number }
+        "402":
+          description: The card was declined. The booking stays unpaid; paying again tries again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: payment failed }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/BookingNotFound"
+        "409": { $ref: "#/components/responses/HoldExpired" }
+        "500":
+          description: A database error. Logged with the booking id only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: payment unavailable }
+        "503":
+          description: >
+            No usable answer from Payments (not configured, a timeout, an
+            error, or an unknown outcome). The booking stays unpaid; paying
+            again retries the same payment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: payment unavailable }
 
   /bookings/{bookingId}/payable:
     get:

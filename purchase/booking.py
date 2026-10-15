@@ -1,9 +1,13 @@
 """Booking helpers: pricing, booking a space and finding bookings."""
 
+import logging
 from datetime import UTC, datetime
 
+from psycopg import Error as DatabaseError
 from psycopg.errors import DeadlockDetected, ExclusionViolation
 
+from purchase import payments_client
+from purchase.logger import logger
 from purchase.member import normalise_member_name
 
 BOOKING_COLUMNS = (
@@ -220,6 +224,104 @@ def mark_paid(cur, booking_id, card_last4) -> dict | None:
         (booking_id,),
     )
     return cur.fetchone()
+
+
+def refund_booking(booking_id, reason) -> str | None:
+    """Refund the booking's charge at Payments in full: "refunded",
+    "no_charge" or "unavailable"; None when Payments is not configured.
+    Never raises: the booking's change has committed."""
+    if not payments_client.enabled():
+        return None
+    try:
+        outcome = payments_client.refund(booking_id, reason)
+    except payments_client.PaymentsUnavailable:
+        outcome = "unavailable"
+    logger.log(
+        logging.ERROR if outcome == "unavailable" else logging.INFO,
+        "refund booking_id=%s reason=%s outcome=%s",
+        booking_id,
+        reason,
+        outcome,
+    )
+    return outcome
+
+
+def apply_payment_result(cur, booking_id, card_last4) -> dict | None:
+    """mark_paid for a charge Payments confirmed. A refused one (None or an
+    unpaid row) is refunded with reason hold_expired (ADR 0004 rule 4)."""
+    row = mark_paid(cur, booking_id, card_last4)
+    if row is None or not row["paid"]:
+        refund_booking(booking_id, "hold_expired")
+    return row
+
+
+def log_payment(booking_id, outcome, status) -> None:
+    """The one outcome line of a /pay: INFO for a 200, WARNING otherwise."""
+    logger.log(
+        logging.INFO if status == 200 else logging.WARNING,
+        "payment booking_id=%s outcome=%s",
+        booking_id,
+        outcome,
+    )
+
+
+def mark_booking_paid(cur, booking_id, card_number, expiry, cvc, force_failure=False):
+    """Pay for a booking through Payments' API. A retry of a paid booking
+    charges nothing and needs no card. Card details only pass through to
+    Payments; only card_last4 is kept.
+    Returns (payload, status) - the raw booking row, or an {"error": ...}."""
+    logger.debug("payment booking_id=%s outcome=started", booking_id)
+    try:
+        row = get_booking(cur, booking_id)
+        if row is None:
+            log_payment(booking_id, "not_found", 404)
+            return {"error": "booking not found"}, 404
+        if row["paid"]:
+            log_payment(booking_id, "already_paid", 200)
+            return row, 200
+
+        facts, status = check_payable(cur, booking_id)  # before any charge
+        if status != 200:  # 409: the hold has expired; 404: cancelled since
+            log_payment(
+                booking_id, "hold_expired" if status == 409 else "not_found", status
+            )
+            return facts, status
+
+        card_last4 = None  # 0 cents: nothing to collect, no call to Payments
+        if facts["amount_cents"] > 0:
+            try:
+                if not payments_client.enabled():
+                    raise payments_client.PaymentsUnavailable("not configured")
+                payment, status = payments_client.charge(
+                    booking_id,
+                    facts["amount_cents"],
+                    card_number,
+                    expiry,
+                    cvc,
+                    force_failure,
+                )
+            except payments_client.PaymentsUnavailable:
+                log_payment(booking_id, "unavailable", 503)
+                return {"error": "payment unavailable"}, 503
+            if status == 400:
+                log_payment(booking_id, "invalid_card", 400)
+                return payment, 400  # the card's first problem, Payments' words
+            if status == 402:
+                log_payment(booking_id, "failed", 402)
+                return {"error": "payment failed"}, 402
+            card_last4 = payment["card_last4"]
+
+        row = apply_payment_result(cur, booking_id, card_last4)
+        if row is None or not row["paid"]:  # refused, and refunded
+            payload, status = check_payable(cur, booking_id)  # 409, or 404
+            log_payment(booking_id, "refused", status)
+            return payload, status
+        log_payment(booking_id, "succeeded", 200)
+        return row, 200
+    except DatabaseError:
+        # Database diagnostics may include SQL parameters; never log the exception.
+        logger.error("payment booking_id=%s outcome=database_error", booking_id)
+        return {"error": "payment unavailable"}, 500
 
 
 def cancel_booking(cur, booking_id) -> dict | None:

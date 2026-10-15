@@ -59,8 +59,8 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 ## Boundaries [ch. 8]
 
 - **Routes have no business rules and no SQL.** A route parses the request, calls one domain function and shapes the response. *Hit:* the module docstring of `purchase/api.py` sets this rule. Exception: `/health` and `/test/reset` in `app.py` run their one statement themselves.
-- **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected. Exception: `POST /bookings/{id}/paid` checks its body in the route and refuses anything but `{"card_last4": "dddd"}`, so card data never reaches a domain function.
-- **Purchase calls no other service.** `spacey` is the hub: it calls each service in turn and passes on the facts the next one needs. Our functions take everything they need as arguments and never reach Payment or Access themselves. *Hit:* `mark_booking_paid` imports `payment.services.authorize_card`; that call leaves Purchase when Payment owns `/pay`.
+- **Raw request data is validated in the domain function.** The route passes values through as sent (`body.get(...)`), so every domain function checks the types it is given. *Hit:* `is_valid_capacity` rejects `True`, which JSON can send where a number is expected. Exception: `POST /bookings/{id}/paid` checks its body in the route and refuses anything but `{"card_last4": "dddd"}`. `POST /bookings/{id}/pay` passes the card details through `mark_booking_paid` to Payments, which checks them; they are never logged or stored.
+- **Purchase calls only Payments, only through `purchase/payments_client.py`.** `spacey` is the hub: it calls each service in turn and passes on the facts the next one needs. Our functions never reach Access or the hub themselves. Payments is the one exception (PUR-027, Payments' ADR 0004): `/pay` charges and a cancel refunds through its API. No other module reads `PAYMENTS_URL` or `SERVICE_TOKEN` or opens a URL. Logs carry ids and fixed outcomes, never card data, a token or a body. *Hit:* `git grep -n -e PAYMENTS_URL -e SERVICE_TOKEN -e urlopen -- purchase ':!purchase/payments_client.py' ':!purchase/tests'` prints nothing.
 - **`openapi.yaml` is the contract.** A change to a path, method, status or body updates `openapi.yaml` in the same PR. A breaking change follows [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages-and-pr-titles).
 
 ## Tests [ch. 9]
@@ -69,7 +69,7 @@ Chapters with no rule here: 1 (introduction), 5 (formatting is Ruff's job), 10 (
 - **Test behaviour through the HTTP API.** Use `create_app().test_client()`, not a mocked cursor, so the SQL is exercised too.
 - **One behaviour per test, named as a sentence.** Name tests like `test_health_reports_local_revision_when_unset`. Separate arrange, act and assert with blank lines.
 - **A new rule, default or error branch gets a test in the same change.**
-- **Flows that depend on another service are tested with each of its answers.** Tests never call another service. Feed every answer it can give into our endpoint instead. *Hit:* a payment that succeeded, failed, is unknown or was refunded.
+- **Flows that depend on another service are tested with each of its answers.** Tests never call another service. Feed every answer it can give into our endpoint instead; for Payments, from an HTTP stub that `PAYMENTS_URL` points at. *Hit:* `purchase/tests/test_pay.py`: a payment that succeeded, failed, is unknown or was refunded.
 
 ## Systems [ch. 11]
 
